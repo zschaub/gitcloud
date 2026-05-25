@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	  xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+	<id>snapcloud</id>
+	<name>Snapcloud</name>
+	<summary>Adds GIT like snapshots</summary>
+	<description>Adds GIT like snapshots for folders in nextcloud. Allows you to commit snapshots, see snapshots, and rollback to other commits if needed.</description>
+	<version>1.0.0</version>
+	<licence>AGPL-3.0-or-later</licence>
+	<author mail="zschaub@proton.me" homepage="">Brian Zschau</author>
+	<namespace>Snapcloud</namespace>
+	<category>files</category>
+	<bugs>https://github.com/zschaub/Snapcloud</bugs>
+	<dependencies>
+		<nextcloud min-version="31" max-version="32"/>
+	</dependencies>
+	<navigations>
+		<navigation>
+			<id>snapcloud</id>
+			<name>Snapcloud</name>
+			<route>snapcloud.page.index</route>
+			<icon>app.svg</icon>
+			<type>link</type>
+		</navigation>
+	</navigations>
+</info>
