@@ -1,25 +1,43 @@
-# Snapcloud
+# snapcloud Nextcloud App README
 
-A template to get started with Nextcloud app development.
+## Project Overview
+`snapcloud` is a Nextcloud app designed to bring basic, user-friendly Git functionality directly into the file manager interface. The goal is to allow users to manage version control operations (like committing changes or rolling back snapshots) without leaving the cloud storage context.
 
-## Usage
+## Current State
 
-- To get started easily use the [Appstore App generator](https://apps.nextcloud.com/developer/apps/generate) to
-  dynamically generate an App based on this repository with all the constants prefilled.
-- Alternatively you can use the "Use this template" button on the top of this page to create a new repository based on
-  this repository. Afterwards adjust all the necessary constants like App ID, namespace, descriptions etc.
+- **App Name:** snapcloud
+- **Base Directory:** `snapcloud`
+- **Status:** Initial planning phase. This README will be updated as features are implemented.
 
-Once your app is ready follow the [instructions](https://nextcloudappstore.readthedocs.io/en/latest/developer.html) to
-upload it to the Appstore.
+## Development Roadmap & Milestones
 
-## Resources
+We will tackle this project in progressive phases to ensure stability and testability at each step.
 
-### Documentation for developers:
+### 🚀 Phase 1: Foundation & Dashboard
 
-- General documentation and tutorials: https://nextcloud.com/developer
-- Technical documentation: https://docs.nextcloud.com/server/latest/developer_manual
+**Goal:** Establish the necessary UI hooks and baseline functionality.
+- Create a main dashboard view showing aggregate statistics (number of files, total size, Git status indicators).
+- Deliverable: A functional `/dashboard` endpoint/view.
 
-### Help for developers:
+### 🛠️ Phase 2: Context Menu Integration & Core Actions
 
-- Official community chat: https://cloud.nextcloud.com/call/xs25tz5y
-- Official community forum: https://help.nextcloud.com/c/dev/11
+**Goal:** Allow users to right-click on a file or directory and select Git actions.
+
+**Actions to Implement (in order):**
+1. **Add to Tracking/Stage** - Automatically stage selected files for commit.
+2. **Commit Changes** - Execute a `git commit` with user-provided messages.
+3. **Rollback Snapshot** - Revert files in the selection to a specified previous snapshot (requires proper snapshot management logic).
+
+### Phase 3: Advanced Functionality & Polish
+
+**Goal:** Add advanced features once core operations are stable.
+- View commit history for selected items
+- Compare snapshots
+- Manage branches visually
+
+## Development Steps
+
+- [ ] Created this README file to outline the plan.
+- [ ] *(Future)* Implement initial dashboard structure.
+
+**⚠️ Important Note:** This development relies heavily on Nextcloud's internal APIs for context menu integration. Implementation will require specific backend services or JavaScript hooks, with compatibility considerations based on the target Nextcloud version.

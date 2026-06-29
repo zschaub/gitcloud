@@ -1,6 +1,6 @@
 {
 	"name": "nextcloud/snapcloud",
-	"description": "Adds GIT like snapshots for folders in nextcloud. Allows you to commit snapshots, see snapshots, and rollback to other commits if needed.",
+	"description": "<![CDATA[The snapcloud app brings professional-grade version control workflows—specifically Git's core functionality into the native Nextcloud file manager experience. Users can treat their shared cloud storage not just as a file repository, but as a tracked, auditable source of truth. Key features include right-click context menu actions for staging and committing local changes, retrieving historical snapshots (rollbacks), and maintaining version integrity with minimal effort. This minimizes the need to switch contexts to a dedicated Git client while providing critical safety nets for document collaboration.]]>",
 	"license": "AGPL-3.0-or-later",
 	"authors": [
 		{

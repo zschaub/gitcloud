@@ -1,18 +1,22 @@
-<?xml version="1.0"?>
-<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	  xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+<?xml version="1.0" ?>
+<info
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd"
+>
 	<id>snapcloud</id>
 	<name>Snapcloud</name>
-	<summary>Adds GIT like snapshots</summary>
-	<description>Adds GIT like snapshots for folders in nextcloud. Allows you to commit snapshots, see snapshots, and rollback to other commits if needed.</description>
-	<version>1.0.0</version>
+	<summary
+    ><![CDATA[snapcloud enhances Nextcloud's file management by integrating fundamental Git version control capabilities directly into the UI.]]></summary>
+	<description
+    ><![CDATA[The snapcloud app brings professional-grade version control workflows—specifically Git's core functionality into the native Nextcloud file manager experience. Users can treat their shared cloud storage not just as a file repository, but as a tracked, auditable source of truth. Key features include right-click context menu actions for staging and committing local changes, retrieving historical snapshots (rollbacks), and maintaining version integrity with minimal effort. This minimizes the need to switch contexts to a dedicated Git client while providing critical safety nets for document collaboration.]]></description>
+	<version>0.0.1</version>
 	<licence>AGPL-3.0-or-later</licence>
 	<author mail="zschaub@proton.me" homepage="">Brian Zschau</author>
 	<namespace>Snapcloud</namespace>
-	<category>files</category>
-	<bugs>https://github.com/zschaub/Snapcloud</bugs>
+	<category>organization</category>
+	<bugs>https://github.com/zschaub/snapcloud</bugs>
 	<dependencies>
-		<nextcloud min-version="31" max-version="32"/>
+		<nextcloud min-version="34" max-version="34" />
 	</dependencies>
 	<navigations>
 		<navigation>

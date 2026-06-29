@@ -3,7 +3,7 @@
     "info": {
         "title": "snapcloud",
         "version": "0.0.1",
-        "description": "Adds GIT like snapshots",
+        "description": "<![CDATA[snapcloud enhances Nextcloud's file management by integrating fundamental Git version control capabilities directly into the UI.]]>",
         "license": {
             "name": "AGPL-3.0-or-later"
         }
