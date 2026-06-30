@@ -3,11 +3,21 @@ import NcAppContent from "@nextcloud/vue/components/NcAppContent";
 import { ref, computed } from "vue";
 
 // --- Mock State for Dashboard Components (To be populated with real data) ---
-const fileCount = ref(12);
-const dirCount = ref(5);
-const totalSizeMb = ref(45.2);
-const lastCommitTime = ref("Just now");
-const gitStatus = ref("Clean"); // Could be 'Modified', 'Unstaged', etc.
+const selectedFiles = ref<string[]>([]);
+
+    const fileCount = ref(12);
+    const dirCount = ref(5);
+    const totalSizeMb = ref(45.2);
+    const gitStatus = ref("Clean"); // Could be 'Modified', 'Unstaged', etc.
+
+    // New state for file selection UI
+    const searchTerm = ref("");
+    const mockFiles = ref([
+        "/folder/file-a.txt",
+        "/folder/sub/image-b.png",
+        "document/report.pdf",
+        "/other_dir/readme.md"
+    ]);
 
 // Mock calculation for status display
 const hasUncommittedChanges = computed(() => gitStatus.value !== "Clean");
@@ -41,17 +51,29 @@ const hasUncommittedChanges = computed(() => gitStatus.value !== "Clean");
                 </div>
             </section>
 
-            <!-- Section 2: Controls (Where Git Actions will live) -->
-            <section class="controls-panel">
-                <h2>Version Controls</h2>
+            <!-- Section 2: File Selection & Controls -->
+            <div class="controls-panel">
+                <h2>Version Control</h2>
 
-                <!-- Placeholder for File/Folder Selection Status -->
+                <!-- New section for finding/selecting files -->
+                <section class="file-picker">
+                    <h3>Select Files & Folders</h3>
+                    <input type="text" v-model="searchTerm" placeholder="Search or browse files (e.g., path/to/file)">
+                    <div class="file-list">
+                        <!-- Mock File List -->
+                        <ul v-if="mockFiles.length > 0">
+                            <li v-for="item in mockFiles" :key="item">{{ item }}</li>
+                        </ul>
+                         <p v-else>No files found matching your criteria.</p>
+                    </div>
+                </section>
+
+                <!-- Display selected items and count -->
                 <div class="selection-status">
-                    Selected Items Count:
-                    <span v-if="fileCount + dirCount > 0">{{
-                        fileCount + dirCount
-                    }}</span
-                    >, otherwise none.
+                    <strong>Selected Items ({{ selectedFiles.length }})</strong>:
+                    <ul class="selected-list">
+                        <li v-for="(file, index) in selectedFiles" :key="index">{{ file }}</li>
+                    </ul>
                 </div>
 
                 <!-- Control Buttons - These will trigger API calls -->
@@ -65,15 +87,27 @@ const hasUncommittedChanges = computed(() => gitStatus.value !== "Clean");
                     <!-- Placeholder for Branch/History viewing -->
                     <div class="info-box">View History</div>
                 </div>
-            </section>
-        </div>
+            </div>
+        </div
+    </template>
     </NcContent>
 </template>
 
 <style module>
 /* Basic styling to make the mockup visible and structured */
 .dashboard-container {
-    padding: 20px;
+
+    /* Basic styling to make the mockup visible and structured */
+
+   /* Basic styling to make the mockup visible and structured */
+   /* Increasing specificity to override default Nextcloud page background */
+   .dashboard-container {
+       padding: 20px;
+       background-color: var(--nextcloud-theme-page-background, #f8f9fa) !important;
+       border-radius: 6px;
+       /* Adding a slight border to visually contain the element if background fails */
+       border: 1px solid var(--nextcloud-theme-card-background-color);
+   }
 }
 
 h1 {
