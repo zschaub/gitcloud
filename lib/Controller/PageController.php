@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace OCA\Snapcloud\Controller;
+namespace OCA\GitCloud\Controller;
 
-use OCA\Snapcloud\AppInfo\Application;
+use OCA\GitCloud\AppInfo\Application;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\Attribute\FrontpageRoute;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;

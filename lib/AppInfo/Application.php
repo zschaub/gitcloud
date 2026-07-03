@@ -1,25 +1,31 @@
 <?php
-
 declare(strict_types=1);
+namespace OCA\GitCloud\AppInfo;
 
-namespace OCA\Snapcloud\AppInfo;
-
+use OCA\Files\Event\LoadAdditionalScriptsEvent;
+use OCA\GitCloud\Listener\LoadAdditionalScriptsListener;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
 
-class Application extends App implements IBootstrap {
-	public const APP_ID = 'snapcloud';
+class Application extends App implements IBootstrap
+{
+    public const APP_ID = "gitcloud";
 
-	/** @psalm-suppress PossiblyUnusedMethod */
-	public function __construct() {
-		parent::__construct(self::APP_ID);
-	}
+    /** @psalm-suppress PossiblyUnusedMethod */
+    public function __construct()
+    {
+        parent::__construct(self::APP_ID);
+    }
 
-	public function register(IRegistrationContext $context): void {
-	}
+    public function register(IRegistrationContext $context): void
+    {
+        $context->registerEventListener(
+            LoadAdditionalScriptsEvent::class,
+            LoadAdditionalScriptsListener::class,
+        );
+    }
 
-	public function boot(IBootContext $context): void {
-	}
+    public function boot(IBootContext $context): void {}
 }

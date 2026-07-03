@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace OCA\Snapcloud\Service;
+namespace OCA\GitCloud\Service;
 
 use OCP\AppFramework\App;
 use Psr\Log\LoggerInterface;
 
 /**
- * Service class handling all version control system logic for snapcloud.
+ * Service class handling all version control system logic for GitCloud.
  * In a real-world scenario, this would interface with an actual Git repository
  * accessible to the Nextcloud instance (e.g., via SSH keys or local filesystem mounting).
  */

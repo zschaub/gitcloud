@@ -1,9 +1,9 @@
 {
     "openapi": "3.0.3",
     "info": {
-        "title": "snapcloud",
+        "title": "gitcloud",
         "version": "0.0.1",
-        "description": "<![CDATA[snapcloud enhances Nextcloud's file management by integrating fundamental Git version control capabilities directly into the UI.]]>",
+        "description": "<![CDATA[GitCloud enhances Nextcloud's file management by integrating fundamental Git version control capabilities directly into the UI.]]>",
         "license": {
             "name": "AGPL-3.0-or-later"
         }
@@ -47,7 +47,7 @@
         }
     },
     "paths": {
-        "/ocs/v2.php/apps/snapcloud/api": {
+        "/ocs/v2.php/apps/gitcloud/api": {
             "get": {
                 "operationId": "api-index",
                 "summary": "An example API endpoint",
