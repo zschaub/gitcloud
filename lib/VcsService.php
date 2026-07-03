@@ -20,27 +20,98 @@ class VcsService {
     }
 
     /**
-     * Simulates staging files and committing changes to a virtual Git repository.
-     * @param string[] $filePaths List of file paths selected by the user.
+     * Stages the given files and commits them in the Git repository rooted at $repositoryPath.
+     * Initializes the repository if it does not already exist.
+     * @param string $repositoryPath Absolute local filesystem path to the repository's working tree.
+     * @param string[] $relativeFilePaths List of file paths, relative to $repositoryPath, to stage.
      * @param string $message The commit message provided by the user.
      * @return array{success: bool, message: string}
      */
-    public function commitChanges(array $filePaths, string $message): array {
-        if (empty($filePaths)) {
+    public function commitChanges(string $repositoryPath, array $relativeFilePaths, string $message): array {
+        if (empty($relativeFilePaths)) {
             $this->logger->warning('Attempted to commit with no files selected.');
             return ['success' => false, 'message' => 'No files selected for commitment.'];
         }
 
-        // --- REAL IMPLEMENTATION NOTES ---
-        // 1. Map $filePaths (Nextcloud IDs/paths) to local paths accessible by Git.
-        // 2. Run: git add file1 file2 ...
-        // 3. Run: git commit -m "{$message}"
-        // 4. Check exit code and return appropriate status.
+        if (trim($message) === '') {
+            return ['success' => false, 'message' => 'A commit message is required.'];
+        }
 
-        $this->logger->info(sprintf('Simulating commit for %d files with message: "%s"', count($filePaths), $message));
+        if (!is_dir($repositoryPath)) {
+            $this->logger->warning(sprintf('Repository path does not exist: %s', $repositoryPath));
+            return ['success' => false, 'message' => 'Repository path does not exist.'];
+        }
+
+        $initResult = $this->ensureRepository($repositoryPath);
+        if (!$initResult['success']) {
+            return $initResult;
+        }
+
+        $addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $relativeFilePaths));
+        if (!$addResult['success']) {
+            $this->logger->warning(sprintf('git add failed: %s', $addResult['output']));
+            return ['success' => false, 'message' => sprintf('Failed to stage files: %s', $addResult['output'])];
+        }
+
+        $commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+        if (!$commitResult['success']) {
+            $this->logger->info(sprintf('git commit did not succeed: %s', $commitResult['output']));
+            return ['success' => false, 'message' => sprintf('Failed to commit changes: %s', $commitResult['output'])];
+        }
+
+        $this->logger->info(sprintf('Committed %d file(s) with message: "%s"', count($relativeFilePaths), $message));
         return [
             'success' => true,
-            'message' => 'Successfully staged and committed changes to the virtual repository.',
+            'message' => 'Successfully staged and committed changes.',
+        ];
+    }
+
+    /**
+     * @return array{success: bool, message?: string}
+     */
+    private function ensureRepository(string $repositoryPath): array {
+        if (is_dir($repositoryPath . '/.git')) {
+            return ['success' => true];
+        }
+
+        $initResult = $this->runGit($repositoryPath, ['init']);
+        if (!$initResult['success']) {
+            $this->logger->warning(sprintf('git init failed: %s', $initResult['output']));
+            return ['success' => false, 'message' => sprintf('Failed to initialize repository: %s', $initResult['output'])];
+        }
+
+        return ['success' => true];
+    }
+
+    /**
+     * Runs a git command in $cwd without invoking a shell, avoiding any need for argument escaping.
+     * @param string[] $args
+     * @return array{success: bool, output: string}
+     */
+    private function runGit(string $cwd, array $args): array {
+        $process = proc_open(
+            array_merge(['git'], $args),
+            [
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $pipes,
+            $cwd,
+        );
+
+        if (!is_resource($process)) {
+            return ['success' => false, 'output' => 'Unable to start the git process.'];
+        }
+
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($process);
+
+        return [
+            'success' => $exitCode === 0,
+            'output' => trim($stdout . "\n" . $stderr),
         ];
     }
 

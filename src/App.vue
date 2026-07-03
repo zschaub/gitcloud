@@ -74,38 +74,6 @@ const hasUncommittedChanges = computed(() => gitStatus.value !== "Clean");
             <!-- Section 2: File Selection & Controls -->
             <div class="controls-panel">
                 <h2>Version Control</h2>
-
-                <section class="file-picker">
-                    <h3>Select Files & Folders</h3>
-                    <input
-                        type="text"
-                        v-model="searchTerm"
-                        placeholder="Search or browse files (e.g., path/to/file)"
-                    />
-                    <div class="file-list">
-                        <ul v-if="filteredFiles.length > 0">
-                            <li
-                                v-for="item in filteredFiles"
-                                :key="item"
-                                @click="selectFile(item)"
-                            >
-                                {{ item }}
-                            </li>
-                        </ul>
-                        <p v-else>No files found matching your criteria.</p>
-                    </div>
-                </section>
-
-                <div class="selection-status">
-                    <strong>Selected Items ({{ selectedFiles.length }})</strong
-                    >:
-                    <ul class="selected-list">
-                        <li v-for="(file, index) in selectedFiles" :key="index">
-                            {{ file }}
-                        </li>
-                    </ul>
-                </div>
-
                 <div class="action-buttons">
                     <button @click="emit('openCommitDialog')">
                         ✨ Commit Changes
@@ -132,9 +100,14 @@ const hasUncommittedChanges = computed(() => gitStatus.value !== "Clean");
 }
 
 h1 {
-    border-bottom: 1px solid var(--nextcloud-theme-border-color, #eee);
+    border-bottom: 1px solid var(--nextcloud-theme-border-color, #ccc);
     padding-bottom: 10px;
     margin-bottom: 30px;
+    color: var(--nextcloud-theme-primary-text-color, #222222);
+}
+
+h2 {
+    color: var(--nextcloud-theme-primary-text-color, #222222);
 }
 
 .stats-grid {
@@ -153,13 +126,14 @@ h1 {
 
 .stat-card h3 {
     font-size: 0.9em;
-    color: var(--nextcloud-theme-secondary-color, #666);
+    color: var(--nextcloud-theme-primary-text-color, #1e1e1e);
     margin-bottom: 5px;
 }
 
 .stat-card p {
     font-size: 1.8em;
     font-weight: bold;
+    color: var(--nextcloud-theme-primary-text-color, #222222);
 }
 
 .status-indicator p {
@@ -172,7 +146,7 @@ h1 {
 
 .controls-panel {
     padding: 20px;
-    background-color: var(--nc-card-background-color, #f9f9f9);
+    background-color: var(--nextcloud-theme-main-background, #ffffff);
     border-radius: 6px;
 }
 
