@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace OCA\GitCloud\Service;
 
+use OCA\GitCloud\Db\Snapshot;
+use OCA\GitCloud\Db\SnapshotMapper;
 use OCP\AppFramework\App;
+use OCP\AppFramework\Db\DoesNotExistException;
+use OCP\AppFramework\Utility\ITimeFactory;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -14,9 +18,13 @@ use Psr\Log\LoggerInterface;
  */
 class VcsService {
     private LoggerInterface $logger;
+    private SnapshotMapper $snapshotMapper;
+    private ITimeFactory $timeFactory;
 
-    public function __construct(LoggerInterface $logger) {
+    public function __construct(LoggerInterface $logger, SnapshotMapper $snapshotMapper, ITimeFactory $timeFactory) {
         $this->logger = $logger;
+        $this->snapshotMapper = $snapshotMapper;
+        $this->timeFactory = $timeFactory;
     }
 
     /**
@@ -190,6 +198,46 @@ class VcsService {
             'success' => true,
             'message' => 'Successfully rolled back selected files to the specified snapshot.',
         ];
+    }
+
+    /**
+     * Records a new snapshot row for a committed or rolled-back file state.
+     */
+    public function createSnapshotRecord(
+        string $userId,
+        string $filePath,
+        string $commitHash,
+        string $message,
+        ?int $parentSnapshotId,
+        string $status,
+    ): Snapshot {
+        $snapshot = new Snapshot();
+        $snapshot->setUserId($userId);
+        $snapshot->setFilePath($filePath);
+        $snapshot->setCommitHash($commitHash);
+        $snapshot->setMessage($message);
+        $snapshot->setParentSnapshotId($parentSnapshotId);
+        $snapshot->setStatus($status);
+        $snapshot->setCreatedAt($this->timeFactory->getTime());
+
+        return $this->snapshotMapper->insert($snapshot);
+    }
+
+    /**
+     * @return Snapshot[]
+     */
+    public function getSnapshotsForFile(string $userId, string $filePath): array {
+        return $this->snapshotMapper->findAllForFile($userId, $filePath);
+    }
+
+    /**
+     * @throws DoesNotExistException
+     */
+    public function updateSnapshotStatus(int $snapshotId, string $status): Snapshot {
+        $snapshot = $this->snapshotMapper->find($snapshotId);
+        $snapshot->setStatus($status);
+
+        return $this->snapshotMapper->update($snapshot);
     }
 
     // Future methods: getCommitHistory(path), listSnapshots() etc.

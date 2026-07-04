@@ -26,9 +26,9 @@ We will tackle this project in progressive phases to ensure stability and testab
 
 **Goal:** Reliable, everyday Git operations that users need most.
 1. ✅ **Wire up the dashboard UI** — Connect the dashboard's placeholder elements to real, live data (file counts, sizes, Git status) instead of dummy values.
-2. **Create a database** — Add persistent storage (Nextcloud app database table(s) via migrations) to track snapshot/commit metadata.
-3. **Commit Changes** — Execute `git commit` with user-provided messages for staged/selected files.
-4. **Rollback Snapshot** — Revert selected files to a previously captured snapshot (requires robust snapshot management).
+2. ✅ **Create a database** — Add persistent storage (Nextcloud app database table(s) via migrations) to track snapshot/commit metadata.
+3. **Commit Changes** — Collect a user-provided commit message in the UI and record a snapshot row for each commit (the underlying `git add`/`git commit` plumbing and context menu wiring were already completed in Phase 1).
+4. **Rollback Snapshot** — Expose available snapshots per file via the API, revert selected files to a previously captured snapshot, and record a new snapshot row for the rollback.
 
 ### 🔮 Phase 3: Advanced Features (TBD)
 
@@ -46,6 +46,6 @@ We will tackle this project in progressive phases to ensure stability and testab
 - [x] Register "Add to GitCloud" context menu entry via `@nextcloud/files`.
 - [x] Wire `VcsService` to stage and commit selected files via `git add`/`git commit` on the user's local Nextcloud storage.
 - [x] Wire dashboard UI elements to real backend data (Phase 2.1).
-- [ ] Create a database (migrations) to track snapshot/commit metadata (Phase 2.2).
-- [ ] Implement Commit Changes with user-provided commit messages (Phase 2.3).
-- [ ] Implement Rollback Snapshot to revert files to a prior snapshot (Phase 2.4).
+- [x] Create a database (migrations) to track snapshot/commit metadata (Phase 2.2).
+- [ ] Collect a commit message in the UI and record a snapshot row after each commit (Phase 2.3).
+- [ ] Expose available snapshots via the API and implement Rollback Snapshot to revert files to a prior snapshot (Phase 2.4).

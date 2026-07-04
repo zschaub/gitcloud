@@ -5,8 +5,7 @@
 	"authors": [
 		{
 			"name": "Brian Zschau",
-			"email": "zschaub@proton.me",
-			"homepage": ""
+			"email": "zschaub@proton.me"
 		}
 	],
 	"autoload": {
