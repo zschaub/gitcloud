@@ -1,19 +1,41 @@
 <script setup lang="ts">
 import NcAppContent from "@nextcloud/vue/components/NcAppContent";
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
+import axios from "@nextcloud/axios";
+import { generateOcsUrl } from "@nextcloud/router";
 
 const emit = defineEmits<{
     (e: "openCommitDialog"): void;
     (e: "openRollbackDialog"): void;
 }>();
 
-// --- Mock State for Dashboard Components (To be populated with real data) ---
 const selectedFiles = ref<string[]>([]);
 
-const fileCount = ref(12);
-const dirCount = ref(5);
-const totalSizeMb = ref(45.2);
-const gitStatus = ref("Clean"); // Could be 'Modified', 'Unstaged', etc.
+const fileCount = ref(0);
+const dirCount = ref(0);
+const totalSizeMb = ref(0);
+const gitStatus = ref("Loading…"); // 'Clean', 'Modified', 'Uninitialized', etc.
+const statusError = ref("");
+
+async function loadStatus() {
+    try {
+        const response = await axios.get(generateOcsUrl("apps/gitcloud/status"));
+        const data = response.data.ocs.data;
+        fileCount.value = data.fileCount;
+        dirCount.value = data.dirCount;
+        totalSizeMb.value = data.totalSizeMb;
+        gitStatus.value = data.gitStatus;
+        statusError.value = "";
+    } catch (error) {
+        gitStatus.value = "Unknown";
+        const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
+        statusError.value =
+            axiosError.response?.data?.ocs?.data?.message ??
+            "Failed to load GitCloud status.";
+    }
+}
+
+onMounted(loadStatus);
 
 const searchTerm = ref("");
 const mockFiles = ref([
@@ -40,13 +62,15 @@ function selectFile(file: string) {
     }
 }
 
-const hasUncommittedChanges = computed(() => gitStatus.value !== "Clean");
+const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
 </script>
 
 <template>
     <NcAppContent app-name="gitcloud">
         <div class="dashboard-container">
             <h1>Git Dashboard</h1>
+
+            <p v-if="statusError" class="status-error">{{ statusError }}</p>
 
             <!-- Section 1: Stats Overview -->
             <section class="stats-grid">
@@ -142,6 +166,11 @@ h2 {
 
 .status-modified {
     border-left: 5px solid var(--nextcloud-theme-warning-color, orange);
+}
+
+.status-error {
+    color: var(--nextcloud-theme-error-color, #d32f2f);
+    margin-bottom: 20px;
 }
 
 .controls-panel {

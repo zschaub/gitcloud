@@ -10,6 +10,7 @@ use OCP\AppFramework\Http\Attribute\ApiRoute;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
+use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
 use OCP\IRequest;
@@ -57,38 +58,14 @@ class ApiController extends OCSController
             );
         }
 
-        $user = $this->userSession->getUser();
-        if ($user === null) {
-            return new DataResponse(
-                [
-                    "status" => "error",
-                    "message" => "No user is logged in.",
-                ],
-                Http::STATUS_UNAUTHORIZED,
-            );
+        $userFolder = $this->getUserFolderOrErrorResponse();
+        if ($userFolder instanceof DataResponse) {
+            return $userFolder;
         }
 
-        $userFolder = $this->rootFolder->getUserFolder($user->getUID());
-        $userFolderStorage = $userFolder->getStorage();
-        if (!$userFolderStorage->isLocal()) {
-            return new DataResponse(
-                [
-                    "status" => "error",
-                    "message" => "GitCloud only supports files stored on local storage.",
-                ],
-                Http::STATUS_BAD_REQUEST,
-            );
-        }
-
-        $repositoryPath = $userFolderStorage->getLocalFile($userFolder->getInternalPath());
-        if ($repositoryPath === false) {
-            return new DataResponse(
-                [
-                    "status" => "error",
-                    "message" => "Unable to resolve the local storage path.",
-                ],
-                Http::STATUS_BAD_REQUEST,
-            );
+        $repositoryPath = $this->getRepositoryPathOrErrorResponse($userFolder);
+        if ($repositoryPath instanceof DataResponse) {
+            return $repositoryPath;
         }
 
         $relativePaths = [];
@@ -141,5 +118,103 @@ class ApiController extends OCSController
             ],
             $result["success"] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
         );
+    }
+
+    /**
+     * Returns live dashboard stats (file/dir counts, total size, Git status)
+     * for the current user's GitCloud repository.
+     *
+     * @return DataResponse<Http::STATUS_OK, array{status: string, fileCount: int, dirCount: int, totalSizeMb: float, gitStatus: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+     *
+     * 200: Status computed and returned.
+     * 400: Repository path could not be resolved or read.
+     * 401: No user is logged in.
+     */
+    #[NoAdminRequired]
+    #[ApiRoute(verb: "GET", url: "/status")]
+    public function getStatus(): DataResponse
+    {
+        $userFolder = $this->getUserFolderOrErrorResponse();
+        if ($userFolder instanceof DataResponse) {
+            return $userFolder;
+        }
+
+        $repositoryPath = $this->getRepositoryPathOrErrorResponse($userFolder);
+        if ($repositoryPath instanceof DataResponse) {
+            return $repositoryPath;
+        }
+
+        $result = $this->vcsService->getRepositoryStatus($repositoryPath);
+        if (!$result["success"]) {
+            return new DataResponse(
+                [
+                    "status" => "error",
+                    "message" => $result["message"],
+                ],
+                Http::STATUS_BAD_REQUEST,
+            );
+        }
+
+        return new DataResponse(
+            [
+                "status" => "success",
+                "fileCount" => $result["fileCount"],
+                "dirCount" => $result["dirCount"],
+                "totalSizeMb" => round($result["totalSizeBytes"] / 1024 / 1024, 1),
+                "gitStatus" => $result["gitStatus"],
+            ],
+            Http::STATUS_OK,
+        );
+    }
+
+    /**
+     * Resolves the current user's Nextcloud folder, or an error DataResponse if none is logged in.
+     * @return Folder|DataResponse<Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+     */
+    private function getUserFolderOrErrorResponse(): Folder|DataResponse
+    {
+        $user = $this->userSession->getUser();
+        if ($user === null) {
+            return new DataResponse(
+                [
+                    "status" => "error",
+                    "message" => "No user is logged in.",
+                ],
+                Http::STATUS_UNAUTHORIZED,
+            );
+        }
+
+        return $this->rootFolder->getUserFolder($user->getUID());
+    }
+
+    /**
+     * Resolves the local filesystem path backing the given user folder, or an error DataResponse.
+     * @return string|DataResponse<Http::STATUS_BAD_REQUEST, array{status: string, message: string}, array{}>
+     */
+    private function getRepositoryPathOrErrorResponse(Folder $userFolder): string|DataResponse
+    {
+        $userFolderStorage = $userFolder->getStorage();
+        if (!$userFolderStorage->isLocal()) {
+            return new DataResponse(
+                [
+                    "status" => "error",
+                    "message" => "GitCloud only supports files stored on local storage.",
+                ],
+                Http::STATUS_BAD_REQUEST,
+            );
+        }
+
+        $repositoryPath = $userFolderStorage->getLocalFile($userFolder->getInternalPath());
+        if ($repositoryPath === false) {
+            return new DataResponse(
+                [
+                    "status" => "error",
+                    "message" => "Unable to resolve the local storage path.",
+                ],
+                Http::STATUS_BAD_REQUEST,
+            );
+        }
+
+        return $repositoryPath;
     }
 }

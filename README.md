@@ -9,7 +9,7 @@
 
 - **App Name:** GitCloud
 - **Base Directory:** `gitcloud`
-- **Status:** Phase 1 complete. This README will be updated as features are implemented.
+- **Status:** Phase 1 complete. Phase 2 in progress. This README will be updated as features are implemented.
 
 ## Development Roadmap & Milestones
 
@@ -22,11 +22,13 @@ We will tackle this project in progressive phases to ensure stability and testab
 - ✅ Right-click context menu entry "Add to GitCloud" registered via `@nextcloud/files`.
 - ✅ Wire the backend stub (`VcsService`) to actually stage and commit selected files when the context action is triggered.
 
-### 🛠️ Phase 2: Core Actions — Commits & Rollbacks
+### 🚧 Phase 2: Core Actions — Commits & Rollbacks (In Progress)
 
 **Goal:** Reliable, everyday Git operations that users need most.
-1. **Commit Changes** — Execute `git commit` with user-provided messages for staged/selected files.
-2. **Rollback Snapshot** — Revert selected files to a previously captured snapshot (requires robust snapshot management).
+1. ✅ **Wire up the dashboard UI** — Connect the dashboard's placeholder elements to real, live data (file counts, sizes, Git status) instead of dummy values.
+2. **Create a database** — Add persistent storage (Nextcloud app database table(s) via migrations) to track snapshot/commit metadata.
+3. **Commit Changes** — Execute `git commit` with user-provided messages for staged/selected files.
+4. **Rollback Snapshot** — Revert selected files to a previously captured snapshot (requires robust snapshot management).
 
 ### 🔮 Phase 3: Advanced Features (TBD)
 
@@ -43,5 +45,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 - [X] Implement initial dashboard structure.
 - [x] Register "Add to GitCloud" context menu entry via `@nextcloud/files`.
 - [x] Wire `VcsService` to stage and commit selected files via `git add`/`git commit` on the user's local Nextcloud storage.
-
-**⚠️ Important Note:** This development relies heavily on Nextcloud's internal APIs for context menu integration. Implementation will require specific backend services or JavaScript hooks, with compatibility considerations based on the target Nextcloud version. In particular, the `@nextcloud/files` frontend package must be kept at the major version bundled by the target Nextcloud core (v4.x for Nextcloud 34) — an older major version's context menu registration API is silently ignored, with no error, if it doesn't match what the core Files app reads from.
+- [x] Wire dashboard UI elements to real backend data (Phase 2.1).
+- [ ] Create a database (migrations) to track snapshot/commit metadata (Phase 2.2).
+- [ ] Implement Commit Changes with user-provided commit messages (Phase 2.3).
+- [ ] Implement Rollback Snapshot to revert files to a prior snapshot (Phase 2.4).
