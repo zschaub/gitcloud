@@ -61,6 +61,11 @@ class VcsService {
 			return ['success' => false, 'message' => sprintf('Failed to stage files: %s', $addResult['output'])];
 		}
 
+		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+		if ($stagedDiffResult['success']) {
+			return ['success' => false, 'message' => 'No changes to commit for the selected file(s).'];
+		}
+
 		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
 		if (!$commitResult['success']) {
 			$this->logger->info(sprintf('git commit did not succeed: %s', $commitResult['output']));

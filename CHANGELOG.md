@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-07-04
+
+### Fixed
+
+- `VcsService::commitChanges` no longer runs `git commit` when the selected file(s) have no actual changes staged (e.g. committing an already up-to-date file). Previously this let raw, confusing git stderr (e.g. `nothing added to commit but untracked files present`) leak through to the UI; it now returns a clear "No changes to commit for the selected file(s)." message.
+
 ## [0.1.3] - 2026-07-04
 
 ### Added
