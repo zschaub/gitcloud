@@ -34,7 +34,8 @@ class ApiController extends OCSController
     /**
      * Commits staged file changes using a provided message.
      *
-     * @param array $data Expected to contain 'files' (array of paths) and 'message' (string).
+     * @param string[] $files File paths, relative to the user's storage, to stage and commit.
+     * @param string $message The commit message.
      * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
      *
      * 200: Commit successful, data returned.
@@ -43,11 +44,8 @@ class ApiController extends OCSController
      */
     #[NoAdminRequired]
     #[ApiRoute(verb: "POST", url: "/commit")]
-    public function commitChanges(array $data): DataResponse
+    public function commitChanges(array $files = [], string $message = ""): DataResponse
     {
-        $files = $data["files"] ?? [];
-        $message = $data["message"] ?? "";
-
         if (empty($files) || empty($message)) {
             return new DataResponse(
                 [
@@ -96,7 +94,7 @@ class ApiController extends OCSController
                 );
             }
 
-            $relativePaths[] = $userFolder->getRelativePath($node->getPath());
+            $relativePaths[] = ltrim($userFolder->getRelativePath($node->getPath()), "/");
         }
 
         if (empty($relativePaths)) {
@@ -109,7 +107,12 @@ class ApiController extends OCSController
             );
         }
 
-        $result = $this->vcsService->commitChanges($repositoryPath, $relativePaths, $message);
+        $result = $this->vcsService->commitChanges(
+            $repositoryPath,
+            $relativePaths,
+            $message,
+            $this->userSession->getUser()->getUID(),
+        );
 
         return new DataResponse(
             [

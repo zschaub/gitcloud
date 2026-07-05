@@ -46,8 +46,8 @@ final class ApiTest extends TestCase {
 			['file2.txt', $file2],
 		]);
 		$userFolder->method('getRelativePath')->willReturnMap([
-			['/testuser/files/file1.txt', 'file1.txt'],
-			['/testuser/files/file2.txt', 'file2.txt'],
+			['/testuser/files/file1.txt', '/file1.txt'],
+			['/testuser/files/file2.txt', '/file2.txt'],
 		]);
 
 		$rootFolder = $this->createMock(IRootFolder::class);
@@ -55,7 +55,7 @@ final class ApiTest extends TestCase {
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('commitChanges')
-			->with('/data/testuser/files', ['file1.txt', 'file2.txt'], 'Initial commit')
+			->with('/data/testuser/files', ['file1.txt', 'file2.txt'], 'Initial commit', 'testuser')
 			->willReturn([
 				'success' => true,
 				'message' => 'Successfully staged and committed changes.',
@@ -63,10 +63,7 @@ final class ApiTest extends TestCase {
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
 
-		$response = $controller->commitChanges([
-			'files' => ['file1.txt', 'file2.txt'],
-			'message' => 'Initial commit',
-		]);
+		$response = $controller->commitChanges(['file1.txt', 'file2.txt'], 'Initial commit');
 
 		$this->assertEquals('success', $response->getData()['status']);
 	}
@@ -79,7 +76,7 @@ final class ApiTest extends TestCase {
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
 
-		$response = $controller->commitChanges([]);
+		$response = $controller->commitChanges();
 
 		$this->assertEquals('error', $response->getData()['status']);
 	}
@@ -95,10 +92,7 @@ final class ApiTest extends TestCase {
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
 
-		$response = $controller->commitChanges([
-			'files' => ['file1.txt'],
-			'message' => 'Initial commit',
-		]);
+		$response = $controller->commitChanges(['file1.txt'], 'Initial commit');
 
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(401, $response->getStatus());

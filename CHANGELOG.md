@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-07-04
+
+### Added
+
+- `VcsService::commitChanges` now records a `gitcloud_snapshots` row for each committed file after a successful commit, using the resulting `git rev-parse HEAD` commit hash and linking to the file's most recent prior snapshot as its parent (Phase 2.3).
+
+### Fixed
+
+- Moved `VcsService` from `lib/VcsService.php` to `lib/Service/VcsService.php` so its `OCA\GitCloud\Service` namespace complies with PSR-4 — the mismatch made the class unresolvable via dependency injection, causing every API request that depends on `VcsService` (including `/commit`) to fail with a 500 error.
+- Fixed a null-pointer bug in the new parent-snapshot lookup: committing a file with no prior snapshot (e.g. its first-ever commit) called `->getId()` on a null array element before the commit could be recorded.
+- Fixed `ApiController::commitChanges(array $data)` binding: Nextcloud's AppFramework binds request parameters by argument name, but the frontend sends `{files, message}` with no top-level `data` key, so `$data` was always `null` and every real `/commit` request crashed with a `TypeError` before running. The controller now takes `$files` and `$message` directly. This bug predates Phase 2.3 and had never been exercised by an actual HTTP request — only by unit tests that call the controller method directly, bypassing Nextcloud's parameter binding entirely.
+- Fixed `ApiController::commitChanges` passing paths with a leading `/` (as returned by `Folder::getRelativePath()`) straight to `git add`, which git rejects as an invalid path for any file not at the repository root. Paths are now stripped of the leading slash before being passed to `VcsService`.
+
 ## [0.1.2] - 2026-07-04
 
 ### Added

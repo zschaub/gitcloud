@@ -33,9 +33,10 @@ class VcsService {
      * @param string $repositoryPath Absolute local filesystem path to the repository's working tree.
      * @param string[] $relativeFilePaths List of file paths, relative to $repositoryPath, to stage.
      * @param string $message The commit message provided by the user.
+     * @param string $userId The UID of the user performing the commit, used to record snapshot rows.
      * @return array{success: bool, message: string}
      */
-    public function commitChanges(string $repositoryPath, array $relativeFilePaths, string $message): array {
+    public function commitChanges(string $repositoryPath, array $relativeFilePaths, string $message, string $userId): array {
         if (empty($relativeFilePaths)) {
             $this->logger->warning('Attempted to commit with no files selected.');
             return ['success' => false, 'message' => 'No files selected for commitment.'];
@@ -65,6 +66,18 @@ class VcsService {
         if (!$commitResult['success']) {
             $this->logger->info(sprintf('git commit did not succeed: %s', $commitResult['output']));
             return ['success' => false, 'message' => sprintf('Failed to commit changes: %s', $commitResult['output'])];
+        }
+
+        $headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
+        if (!$headResult['success']) {
+            $this->logger->warning(sprintf('git rev-parse HEAD failed after commit: %s', $headResult['output']));
+        }
+        $commitHash = $headResult['success'] ? trim($headResult['output']) : '';
+
+        foreach ($relativeFilePaths as $filePath) {
+            $previousSnapshots = $this->getSnapshotsForFile($userId, $filePath);
+            $parentSnapshotId = isset($previousSnapshots[0]) ? $previousSnapshots[0]->getId() : null;
+            $this->createSnapshotRecord($userId, $filePath, $commitHash, $message, $parentSnapshotId, 'committed');
         }
 
         $this->logger->info(sprintf('Committed %d file(s) with message: "%s"', count($relativeFilePaths), $message));
