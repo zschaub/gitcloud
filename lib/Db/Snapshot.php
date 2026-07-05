@@ -24,21 +24,21 @@ use OCP\DB\Types;
  * @method int getCreatedAt()
  */
 class Snapshot extends Entity {
-    protected string $userId = '';
-    protected string $filePath = '';
-    protected string $commitHash = '';
-    protected string $message = '';
-    protected ?int $parentSnapshotId = null;
-    protected string $status = 'committed';
-    protected int $createdAt = 0;
+	protected string $userId = '';
+	protected string $filePath = '';
+	protected string $commitHash = '';
+	protected string $message = '';
+	protected ?int $parentSnapshotId = null;
+	protected string $status = 'committed';
+	protected int $createdAt = 0;
 
-    public function __construct() {
-        $this->addType('userId', Types::STRING);
-        $this->addType('filePath', Types::STRING);
-        $this->addType('commitHash', Types::STRING);
-        $this->addType('message', Types::STRING);
-        $this->addType('parentSnapshotId', Types::INTEGER);
-        $this->addType('status', Types::STRING);
-        $this->addType('createdAt', Types::INTEGER);
-    }
+	public function __construct() {
+		$this->addType('userId', Types::STRING);
+		$this->addType('filePath', Types::STRING);
+		$this->addType('commitHash', Types::STRING);
+		$this->addType('message', Types::STRING);
+		$this->addType('parentSnapshotId', Types::INTEGER);
+		$this->addType('status', Types::STRING);
+		$this->addType('createdAt', Types::INTEGER);
+	}
 }
