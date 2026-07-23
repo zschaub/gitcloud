@@ -26,7 +26,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 
 **Goal:** Reliable, everyday Git operations that users need most.
 1. ✅ **Wire up the dashboard UI** — Connect the dashboard's placeholder elements to real, live data (file counts, sizes, Git status) instead of dummy values.
-   - [ ] **Follow-up:** Redesign the dashboard into a two-state layout — an Overview (global stats + a searchable list of committed directories) that switches to a Directory Detail view (stats scoped to the selected directory, plus Commit/Rollback controls) when a directory is selected, with a way to deselect back to Overview. 
+   - ✅ **Follow-up:** Redesign the dashboard into a two-state layout — an Overview (global stats + a searchable list of committed directories) that switches to a Directory Detail view (stats scoped to the selected directory, plus Commit/Rollback controls) when a directory is selected, with a way to deselect back to Overview. The committed-directories list and directory-scoped stats are currently derived from client-side mock data pending a real backend endpoint (see kanban); Commit Changes is wired to the real `/commit` endpoint, Rollback Snapshot stays disabled until Phase 2.4 lands.
 2. ✅ **Create a database** — Add persistent storage (Nextcloud app database table(s) via migrations) to track snapshot/commit metadata.
 3. ✅ **Commit Changes** — Collect a user-provided commit message in the UI and record a snapshot row for each commit (the underlying `git add`/`git commit` plumbing and context menu wiring were already completed in Phase 1).
 4. **Rollback Snapshot** — Expose available snapshots per file via the API, revert selected files to a previously captured snapshot, and record a new snapshot row for the rollback.
@@ -50,4 +50,4 @@ We will tackle this project in progressive phases to ensure stability and testab
 - [x] Create a database (migrations) to track snapshot/commit metadata (Phase 2.2).
 - [x] Collect a commit message in the UI and record a snapshot row after each commit (Phase 2.3).
 - [ ] Expose available snapshots via the API and implement Rollback Snapshot to revert files to a prior snapshot (Phase 2.4).
-- [ ] Redesign the dashboard into an Overview/Directory-Detail two-state layout with a committed-directories search (follow-up to Phase 2.1).
+- [x] Redesign the dashboard into an Overview/Directory-Detail two-state layout with a committed-directories search (follow-up to Phase 2.1). Directory list/stats are mock-data-derived for now; see kanban for the follow-up backend work.

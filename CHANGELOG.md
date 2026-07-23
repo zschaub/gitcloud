@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-07-06
+
+### Added
+
+- Redesigned the dashboard (`src/App.vue`) into a two-state Overview/Directory Detail layout (Phase 2.1 follow-up): Overview shows the global stat cards plus a searchable, selectable list of committed directories; selecting one switches to Directory Detail, showing stats scoped to that directory plus Commit Changes/Rollback Snapshot controls, with a button to return to Overview. The committed-directories list and directory-scoped stats are derived from client-side mock data for now — a real backend query grouping `gitcloud_snapshots` by directory prefix is tracked as a follow-up.
+- Directory Detail's "Commit Changes" button is wired to the real `POST /apps/gitcloud/commit` endpoint (same request pattern as the "Add to GitCloud" context menu action). "Rollback Snapshot" is shown disabled, pending Phase 2.4's rollback implementation.
+- Adopted `NcTextField`, `NcListItem`, and `NcButton` from `@nextcloud/vue` for the new search box, directory list, and action buttons.
+
+### Fixed
+
+- The new `NcTextField`/`NcListItem`/tertiary `NcButton` elements were unreadable (dark-on-dark or white-on-white) on Nextcloud instances using a dark theme, because those components inherit text/background color from real Nextcloud theme variables while the rest of the dashboard uses its own always-light, hardcoded-fallback styling. `.dashboard-container` now overrides the relevant theme variables (and re-declares `color`, since some child elements inherit an already-computed literal color rather than re-reading the variable) so the whole dashboard renders consistently light regardless of the instance's active theme.
+
+### Removed
+
+- Removed the dashboard's unused `openCommitDialog`/`openRollbackDialog` emits (no listener ever consumed them) and the dead, unrendered mock file-selection code (`selectedFiles`, `selectFile`, `filteredFiles`) superseded by the new directory-selection state. Removed the static, non-functional "View History" placeholder box.
+
 ## [0.1.4] - 2026-07-04
 
 ### Fixed

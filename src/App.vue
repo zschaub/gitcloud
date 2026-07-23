@@ -1,15 +1,11 @@
 <script setup lang="ts">
 import NcAppContent from "@nextcloud/vue/components/NcAppContent";
+import NcTextField from "@nextcloud/vue/components/NcTextField";
+import NcListItem from "@nextcloud/vue/components/NcListItem";
+import NcButton from "@nextcloud/vue/components/NcButton";
 import { ref, computed, onMounted } from "vue";
 import axios from "@nextcloud/axios";
 import { generateOcsUrl } from "@nextcloud/router";
-
-const emit = defineEmits<{
-    (e: "openCommitDialog"): void;
-    (e: "openRollbackDialog"): void;
-}>();
-
-const selectedFiles = ref<string[]>([]);
 
 const fileCount = ref(0);
 const dirCount = ref(0);
@@ -46,23 +42,81 @@ const mockFiles = ref([
     "config/settings.yml",
 ]);
 
-const filteredFiles = computed(() => {
-    if (!searchTerm.value) return mockFiles.value;
-    return mockFiles.value.filter((file) =>
-        file.toLowerCase().includes(searchTerm.value.toLowerCase()),
+const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
+
+const selectedDirectory = ref<string | null>(null); // null = Overview
+
+// mockFiles mixes leading-slash and non-leading-slash paths; normalize before
+// taking the parent directory so both styles group correctly.
+function dirnameOf(filePath: string): string {
+    const normalized = filePath.replace(/^\/+/, "");
+    const idx = normalized.lastIndexOf("/");
+    return idx === -1 ? "/" : normalized.slice(0, idx);
+}
+
+const committedDirectories = computed(() => {
+    const dirs = new Set(mockFiles.value.map(dirnameOf));
+    return Array.from(dirs).sort();
+});
+
+const filteredDirectories = computed(() => {
+    if (!searchTerm.value) return committedDirectories.value;
+    return committedDirectories.value.filter((dir) =>
+        dir.toLowerCase().includes(searchTerm.value.toLowerCase()),
     );
 });
 
-function selectFile(file: string) {
-    const index = selectedFiles.value.indexOf(file);
-    if (index > -1) {
-        selectedFiles.value.splice(index, 1);
-    } else {
-        selectedFiles.value.push(file);
-    }
+const selectedDirectoryFiles = computed(() => {
+    if (!selectedDirectory.value) return [];
+    return mockFiles.value.filter((file) => dirnameOf(file) === selectedDirectory.value);
+});
+
+const selectedDirectoryFileCount = computed(() => selectedDirectoryFiles.value.length);
+
+function selectDirectory(dir: string) {
+    selectedDirectory.value = dir;
 }
 
-const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
+function deselectDirectory() {
+    selectedDirectory.value = null;
+}
+
+const isCommitting = ref(false);
+const commitError = ref("");
+const commitSuccessMessage = ref("");
+
+async function commitSelectedDirectory() {
+    if (!selectedDirectory.value) return;
+
+    const message = window.prompt(
+        `Commit message for "${selectedDirectory.value}":`,
+        "",
+    );
+    if (message === null) return;
+    if (message.trim() === "") {
+        window.alert("A commit message is required.");
+        return;
+    }
+
+    isCommitting.value = true;
+    commitError.value = "";
+    commitSuccessMessage.value = "";
+    try {
+        const response = await axios.post(generateOcsUrl("apps/gitcloud/commit"), {
+            files: selectedDirectoryFiles.value,
+            message,
+        });
+        commitSuccessMessage.value = response.data.ocs.data.message;
+        await loadStatus();
+    } catch (error) {
+        const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
+        commitError.value =
+            axiosError.response?.data?.ocs?.data?.message ??
+            "Failed to commit changes to GitCloud.";
+    } finally {
+        isCommitting.value = false;
+    }
+}
 </script>
 
 <template>
@@ -72,42 +126,95 @@ const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
 
             <p v-if="statusError" class="status-error">{{ statusError }}</p>
 
-            <!-- Section 1: Stats Overview -->
-            <section class="stats-grid">
-                <div class="stat-card">
-                    <h3>Files Tracked</h3>
-                    <p>{{ fileCount }}</p>
-                </div>
-                <div class="stat-card">
-                    <h3>Directories</h3>
-                    <p>{{ dirCount }}</p>
-                </div>
-                <div class="stat-card">
-                    <h3>Total Size</h3>
-                    <p>{{ totalSizeMb }} MB</p>
-                </div>
-                <div
-                    class="stat-card status-indicator"
-                    :class="{ 'status-modified': hasUncommittedChanges }"
-                >
-                    <h3>Status</h3>
-                    <p>{{ gitStatus }}</p>
-                </div>
-            </section>
+            <!-- State A: Overview -->
+            <template v-if="!selectedDirectory">
+                <section class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Files Tracked</h3>
+                        <p>{{ fileCount }}</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Directories</h3>
+                        <p>{{ dirCount }}</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Total Size</h3>
+                        <p>{{ totalSizeMb }} MB</p>
+                    </div>
+                    <div
+                        class="stat-card status-indicator"
+                        :class="{ 'status-modified': hasUncommittedChanges }"
+                    >
+                        <h3>Status</h3>
+                        <p>{{ gitStatus }}</p>
+                    </div>
+                </section>
 
-            <!-- Section 2: File Selection & Controls -->
-            <div class="controls-panel">
-                <h2>Version Control</h2>
-                <div class="action-buttons">
-                    <button @click="emit('openCommitDialog')">
-                        ✨ Commit Changes
-                    </button>
-                    <button @click="emit('openRollbackDialog')">
-                        ↩️ Rollback Snapshot
-                    </button>
-                    <div class="info-box">View History</div>
+                <div class="directories-panel">
+                    <h2>Committed Directories</h2>
+                    <NcTextField
+                        :model-value="searchTerm"
+                        label="Search directories"
+                        placeholder="Search directories…"
+                        @update:model-value="searchTerm = String($event)"
+                    />
+                    <ul v-if="filteredDirectories.length" class="directory-list">
+                        <NcListItem
+                            v-for="dir in filteredDirectories"
+                            :key="dir"
+                            :name="dir"
+                            @click="selectDirectory(dir)"
+                        />
+                    </ul>
+                    <p v-else>No directories found.</p>
                 </div>
-            </div>
+            </template>
+
+            <!-- State B: Directory Detail -->
+            <template v-else>
+                <div class="detail-header">
+                    <NcButton variant="tertiary" @click="deselectDirectory">
+                        ← Back to Overview
+                    </NcButton>
+                    <h2>{{ selectedDirectory }}</h2>
+                </div>
+
+                <section class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Files in Directory</h3>
+                        <p>{{ selectedDirectoryFileCount }}</p>
+                    </div>
+                    <div
+                        class="stat-card status-indicator"
+                        :class="{ 'status-modified': hasUncommittedChanges }"
+                    >
+                        <h3>Status</h3>
+                        <p>{{ gitStatus }}</p>
+                    </div>
+                </section>
+
+                <div class="controls-panel">
+                    <h2>Version Control</h2>
+                    <p v-if="commitError" class="status-error">{{ commitError }}</p>
+                    <p v-if="commitSuccessMessage" class="status-success">{{ commitSuccessMessage }}</p>
+                    <div class="action-buttons">
+                        <NcButton
+                            variant="primary"
+                            :disabled="isCommitting"
+                            @click="commitSelectedDirectory"
+                        >
+                            {{ isCommitting ? "Committing…" : "✨ Commit Changes" }}
+                        </NcButton>
+                        <NcButton
+                            variant="secondary"
+                            disabled
+                            title="Rollback is not yet implemented (Phase 2.4)"
+                        >
+                            ↩️ Rollback Snapshot
+                        </NcButton>
+                    </div>
+                </div>
+            </template>
         </div>
     </NcAppContent>
 </template>
@@ -115,12 +222,30 @@ const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
 <style scoped>
 .dashboard-container {
     padding: 20px;
+    min-height: 100%;
     background-color: var(
         --nextcloud-theme-page-background,
         #f8f9fa
     ) !important;
     border-radius: 6px;
     border: 1px solid var(--nextcloud-theme-card-background-color);
+
+    /* Several @nextcloud/vue components (NcTextField, NcListItem, NcButton's
+       tertiary variant) read these real Nextcloud theme variables and/or
+       inherit `color` from them, which otherwise follow the instance's
+       active (possibly dark) theme and clash with this dashboard's
+       always-light styling above. Redeclaring `color` (not just the custom
+       property) ensures descendants that don't set their own color, like
+       NcListItem's name text or a tertiary NcButton's label, inherit the
+       light-mode value from here instead of a dark-theme value computed
+       higher up the tree. */
+    --color-main-background: #ffffff;
+    --color-main-text: #222222;
+    --color-text-maxcontrast: #767676;
+    --color-border-maxcontrast: #cccccc;
+    --input-border-color: #cccccc;
+    --color-background-hover: #f5f5f5;
+    color: var(--color-main-text);
 }
 
 h1 {
@@ -173,26 +298,37 @@ h2 {
     margin-bottom: 20px;
 }
 
-.controls-panel {
+.status-success {
+    color: var(--nextcloud-theme-success-color, #2e7d32);
+    margin-bottom: 20px;
+}
+
+.controls-panel,
+.directories-panel {
     padding: 20px;
     background-color: var(--nextcloud-theme-main-background, #ffffff);
     border-radius: 6px;
 }
 
-.action-buttons button {
-    margin-right: 15px;
-    padding: 10px 20px;
-    cursor: pointer;
-    background-color: var(--nextcloud-theme-primary-color, #007bff);
-    color: white;
-    border: none;
-    border-radius: 4px;
+.directories-panel {
+    margin-bottom: 20px;
 }
 
-.info-box {
-    padding: 10px;
-    margin-top: 20px;
-    background-color: #eee;
-    border-radius: 4px;
+.directory-list {
+    list-style: none;
+    padding: 0;
+    margin-top: 10px;
+}
+
+.detail-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 15px;
 }
 </style>
