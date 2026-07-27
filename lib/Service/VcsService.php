@@ -190,30 +190,82 @@ class VcsService {
 	}
 
 	/**
-	 * Simulates rolling back selected files to a historical snapshot.
-	 * @param string[] $filePaths List of file paths that need rollback.
-	 * @param string|null $snapshotReference A reference point (e.g., commit hash or timestamp).
+	 * Restores a single file to the content it had at a previously recorded snapshot,
+	 * then commits the restoration and records a new snapshot row for it.
+	 * @param string $repositoryPath Absolute local filesystem path to the repository's working tree.
+	 * @param string $relativeFilePath Path of the file to roll back, relative to $repositoryPath.
+	 * @param int $snapshotId ID of the `gitcloud_snapshots` row to restore the file to.
+	 * @param string $userId The UID of the user performing the rollback.
 	 * @return array{success: bool, message: string}
 	 */
-	public function rollbackToSnapshot(array $filePaths, ?string $snapshotReference): array {
-		if (empty($filePaths)) {
-			$this->logger->warning('Attempted to roll back with no files selected.');
-			return ['success' => false, 'message' => 'No files selected for rollback.'];
+	public function rollbackToSnapshot(string $repositoryPath, string $relativeFilePath, int $snapshotId, string $userId): array {
+		if (trim($relativeFilePath) === '') {
+			$this->logger->warning('Attempted to roll back with no file selected.');
+			return ['success' => false, 'message' => 'No file selected for rollback.'];
 		}
 
-		// --- REAL IMPLEMENTATION NOTES ---
-		// 1. Validate $snapshotReference exists in the target repo.
-		// 2. For each file: Run command similar to: git checkout {$snapshotReference}-- {local_file_path}
-		// 3. Handle potential conflicts or missing state checks.
-
-		if (!$snapshotReference) {
-			return ['success' => false, 'message' => 'Snapshot reference is required for rollback.'];
+		if (!is_dir($repositoryPath)) {
+			$this->logger->warning(sprintf('Repository path does not exist: %s', $repositoryPath));
+			return ['success' => false, 'message' => 'Repository path does not exist.'];
 		}
 
-		$this->logger->info(sprintf('Simulating rollback of %d files to snapshot: %s', count($filePaths), $snapshotReference));
+		if (!is_dir($repositoryPath . '/.git')) {
+			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
+		}
+
+		try {
+			$snapshot = $this->snapshotMapper->find($snapshotId);
+		} catch (DoesNotExistException) {
+			return ['success' => false, 'message' => 'Snapshot not found.'];
+		}
+
+		if ($snapshot->getUserId() !== $userId || $snapshot->getFilePath() !== $relativeFilePath) {
+			return ['success' => false, 'message' => 'Snapshot does not match the requested file.'];
+		}
+
+		$commitHash = $snapshot->getCommitHash();
+		if (trim($commitHash) === '') {
+			return ['success' => false, 'message' => 'Snapshot has no associated commit to restore.'];
+		}
+
+		$checkoutResult = $this->runGit($repositoryPath, ['checkout', $commitHash, '--', $relativeFilePath]);
+		if (!$checkoutResult['success']) {
+			$this->logger->warning(sprintf('git checkout failed during rollback: %s', $checkoutResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to restore file: %s', $checkoutResult['output'])];
+		}
+
+		$addResult = $this->runGit($repositoryPath, ['add', '--', $relativeFilePath]);
+		if (!$addResult['success']) {
+			$this->logger->warning(sprintf('git add failed during rollback: %s', $addResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to stage restored file: %s', $addResult['output'])];
+		}
+
+		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+		if ($stagedDiffResult['success']) {
+			return ['success' => false, 'message' => 'File is already at the selected snapshot.'];
+		}
+
+		$message = sprintf('Roll back %s to snapshot #%d', $relativeFilePath, $snapshotId);
+		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+		if (!$commitResult['success']) {
+			$this->logger->info(sprintf('git commit did not succeed during rollback: %s', $commitResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to commit restored file: %s', $commitResult['output'])];
+		}
+
+		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
+		if (!$headResult['success']) {
+			$this->logger->warning(sprintf('git rev-parse HEAD failed after rollback: %s', $headResult['output']));
+		}
+		$newCommitHash = $headResult['success'] ? trim($headResult['output']) : '';
+
+		$previousSnapshots = $this->getSnapshotsForFile($userId, $relativeFilePath);
+		$parentSnapshotId = isset($previousSnapshots[0]) ? $previousSnapshots[0]->getId() : null;
+		$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshotId, 'rolled_back');
+
+		$this->logger->info(sprintf('Rolled back %s to snapshot #%d', $relativeFilePath, $snapshotId));
 		return [
 			'success' => true,
-			'message' => 'Successfully rolled back selected files to the specified snapshot.',
+			'message' => sprintf('Successfully rolled back %s to the selected snapshot.', $relativeFilePath),
 		];
 	}
 
@@ -255,6 +307,42 @@ class VcsService {
 		$snapshot->setStatus($status);
 
 		return $this->snapshotMapper->update($snapshot);
+	}
+
+	/**
+	 * Groups the user's ever-committed files by directory, for the dashboard's
+	 * committed-directories list. A file with no directory component (i.e. at
+	 * the repository root) is grouped under "/".
+	 * @return list<array{path: string, files: list<string>}>
+	 */
+	public function getCommittedDirectories(string $userId): array {
+		$filesByDirectory = [];
+		foreach ($this->snapshotMapper->findAllForUser($userId) as $snapshot) {
+			$filePath = ltrim($snapshot->getFilePath(), '/');
+			$filesByDirectory[$this->directoryOf($filePath)][$filePath] = true;
+		}
+
+		ksort($filesByDirectory);
+
+		$directories = [];
+		foreach ($filesByDirectory as $directory => $files) {
+			$fileList = array_keys($files);
+			sort($fileList);
+			$directories[] = ['path' => $directory, 'files' => $fileList];
+		}
+
+		return $directories;
+	}
+
+	/**
+	 * Returns the directory portion of a repository-relative file path, or "/"
+	 * if the file is at the repository root.
+	 */
+	private function directoryOf(string $filePath): string {
+		$normalized = ltrim($filePath, '/');
+		$slashPos = strrpos($normalized, '/');
+
+		return $slashPos === false ? '/' : substr($normalized, 0, $slashPos);
 	}
 
 	// Future methods: getCommitHistory(path), listSnapshots() etc.

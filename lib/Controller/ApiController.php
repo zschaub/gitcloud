@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OCA\GitCloud\Controller;
 
+use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Service\VcsService;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\ApiRoute;
@@ -164,6 +165,173 @@ class ApiController extends OCSController {
 				'gitStatus' => $result['gitStatus'],
 			],
 			Http::STATUS_OK,
+		);
+	}
+
+	/**
+	 * Returns the directories the current user has ever committed files under,
+	 * each with the list of files tracked in it, for the dashboard's
+	 * committed-directories list.
+	 *
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, directories: list<array{path: string, files: list<string>}>}, array{}>|DataResponse<Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Directories retrieved.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'GET', url: '/directories')]
+	public function getDirectories(): DataResponse {
+		$user = $this->userSession->getUser();
+		if ($user === null) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => 'No user is logged in.',
+				],
+				Http::STATUS_UNAUTHORIZED,
+			);
+		}
+
+		return new DataResponse(
+			[
+				'status' => 'success',
+				'directories' => $this->vcsService->getCommittedDirectories($user->getUID()),
+			],
+			Http::STATUS_OK,
+		);
+	}
+
+	/**
+	 * Returns the snapshot history for a single file, newest first.
+	 *
+	 * @param string $filePath File path, relative to the user's storage, to fetch snapshots for.
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, snapshots: list<array{id: int, commitHash: string, message: string, status: string, createdAt: int, parentSnapshotId: int|null}>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Snapshots retrieved.
+	 * 400: Missing file path, or the file could not be resolved.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'GET', url: '/snapshots')]
+	public function getSnapshots(string $filePath = ''): DataResponse {
+		if ($filePath === '') {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => 'Missing file path.',
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		try {
+			$node = $userFolder->get($filePath);
+		} catch (NotFoundException) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf('File not found: %s', $filePath),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
+
+		$snapshots = $this->vcsService->getSnapshotsForFile($this->userSession->getUser()->getUID(), $relativePath);
+
+		return new DataResponse(
+			[
+				'status' => 'success',
+				'snapshots' => array_map(static fn (Snapshot $snapshot): array => [
+					'id' => $snapshot->getId(),
+					'commitHash' => $snapshot->getCommitHash(),
+					'message' => $snapshot->getMessage(),
+					'status' => $snapshot->getStatus(),
+					'createdAt' => $snapshot->getCreatedAt(),
+					'parentSnapshotId' => $snapshot->getParentSnapshotId(),
+				], $snapshots),
+			],
+			Http::STATUS_OK,
+		);
+	}
+
+	/**
+	 * Rolls back a single file to a previously recorded snapshot.
+	 *
+	 * @param string $filePath File path, relative to the user's storage, to roll back.
+	 * @param int $snapshotId ID of the snapshot to restore the file to.
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Rollback successful, data returned.
+	 * 400: Missing or invalid data, or the rollback failed.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'POST', url: '/rollback')]
+	public function rollbackSnapshot(string $filePath = '', int $snapshotId = 0): DataResponse {
+		if ($filePath === '' || $snapshotId <= 0) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => 'Missing file path or snapshot ID.',
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		$repositoryPath = $this->getRepositoryPathOrErrorResponse($userFolder);
+		if ($repositoryPath instanceof DataResponse) {
+			return $repositoryPath;
+		}
+
+		try {
+			$node = $userFolder->get($filePath);
+		} catch (NotFoundException) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf('File not found: %s', $filePath),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		if (!$node->getStorage()->isLocal()) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf('File is not on local storage: %s', $filePath),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
+
+		$result = $this->vcsService->rollbackToSnapshot(
+			$repositoryPath,
+			$relativePath,
+			$snapshotId,
+			$this->userSession->getUser()->getUID(),
+		);
+
+		return new DataResponse(
+			[
+				'status' => $result['success'] ? 'success' : 'error',
+				'message' => $result['message'],
+			],
+			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
 		);
 	}
 

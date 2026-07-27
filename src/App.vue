@@ -24,40 +24,45 @@ async function loadStatus() {
         statusError.value = "";
     } catch (error) {
         gitStatus.value = "Unknown";
-        const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
-        statusError.value =
-            axiosError.response?.data?.ocs?.data?.message ??
-            "Failed to load GitCloud status.";
+        statusError.value = extractErrorMessage(error, "Failed to load GitCloud status.");
     }
 }
 
-onMounted(loadStatus);
+function extractErrorMessage(error: unknown, fallback: string): string {
+    const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
+    return axiosError.response?.data?.ocs?.data?.message ?? fallback;
+}
+
+interface CommittedDirectory {
+    path: string;
+    files: string[];
+}
+
+const directories = ref<CommittedDirectory[]>([]);
+const directoriesError = ref("");
+
+async function loadDirectories() {
+    try {
+        const response = await axios.get(generateOcsUrl("apps/gitcloud/directories"));
+        directories.value = response.data.ocs.data.directories;
+        directoriesError.value = "";
+    } catch (error) {
+        directoriesError.value = extractErrorMessage(error, "Failed to load committed directories.");
+    }
+}
+
+onMounted(() => {
+    loadStatus();
+    loadDirectories();
+});
 
 const searchTerm = ref("");
-const mockFiles = ref([
-    "/folder/file-a.txt",
-    "/folder/sub/image-b.png",
-    "document/report.pdf",
-    "/other_dir/readme.md",
-    "config/settings.yml",
-]);
 
 const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
 
 const selectedDirectory = ref<string | null>(null); // null = Overview
 
-// mockFiles mixes leading-slash and non-leading-slash paths; normalize before
-// taking the parent directory so both styles group correctly.
-function dirnameOf(filePath: string): string {
-    const normalized = filePath.replace(/^\/+/, "");
-    const idx = normalized.lastIndexOf("/");
-    return idx === -1 ? "/" : normalized.slice(0, idx);
-}
-
-const committedDirectories = computed(() => {
-    const dirs = new Set(mockFiles.value.map(dirnameOf));
-    return Array.from(dirs).sort();
-});
+const committedDirectories = computed(() => directories.value.map((dir) => dir.path));
 
 const filteredDirectories = computed(() => {
     if (!searchTerm.value) return committedDirectories.value;
@@ -68,7 +73,7 @@ const filteredDirectories = computed(() => {
 
 const selectedDirectoryFiles = computed(() => {
     if (!selectedDirectory.value) return [];
-    return mockFiles.value.filter((file) => dirnameOf(file) === selectedDirectory.value);
+    return directories.value.find((dir) => dir.path === selectedDirectory.value)?.files ?? [];
 });
 
 const selectedDirectoryFileCount = computed(() => selectedDirectoryFiles.value.length);
@@ -107,14 +112,101 @@ async function commitSelectedDirectory() {
             message,
         });
         commitSuccessMessage.value = response.data.ocs.data.message;
-        await loadStatus();
+        await Promise.all([loadStatus(), loadDirectories()]);
     } catch (error) {
-        const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
-        commitError.value =
-            axiosError.response?.data?.ocs?.data?.message ??
-            "Failed to commit changes to GitCloud.";
+        commitError.value = extractErrorMessage(error, "Failed to commit changes to GitCloud.");
     } finally {
         isCommitting.value = false;
+    }
+}
+
+const isRollingBack = ref(false);
+const rollbackError = ref("");
+const rollbackSuccessMessage = ref("");
+
+async function rollbackSelectedDirectory() {
+    if (!selectedDirectory.value || selectedDirectoryFiles.value.length === 0) return;
+
+    rollbackError.value = "";
+    rollbackSuccessMessage.value = "";
+
+    let filePath: string;
+    if (selectedDirectoryFiles.value.length === 1) {
+        filePath = selectedDirectoryFiles.value[0];
+    } else {
+        const fileList = selectedDirectoryFiles.value
+            .map((file, index) => `${index + 1}. ${file}`)
+            .join("\n");
+        const choice = window.prompt(
+            `Which file do you want to roll back?\n${fileList}\n\nEnter the file path exactly as shown above:`,
+            selectedDirectoryFiles.value[0],
+        );
+        if (choice === null) return;
+        if (!selectedDirectoryFiles.value.includes(choice)) {
+            window.alert("Please enter one of the listed file paths exactly.");
+            return;
+        }
+        filePath = choice;
+    }
+
+    isRollingBack.value = true;
+    let snapshots: { id: number; message: string; createdAt: number }[];
+    try {
+        const response = await axios.get(generateOcsUrl("apps/gitcloud/snapshots"), {
+            params: { filePath },
+        });
+        snapshots = response.data.ocs.data.snapshots;
+    } catch (error) {
+        rollbackError.value = extractErrorMessage(error, "Failed to load snapshots for the selected file.");
+        isRollingBack.value = false;
+        return;
+    }
+    isRollingBack.value = false;
+
+    if (!snapshots.length) {
+        window.alert(`No snapshots found for "${filePath}".`);
+        return;
+    }
+
+    const snapshotList = snapshots
+        .map((snapshot, index) => {
+            const timestamp = new Date(snapshot.createdAt * 1000).toLocaleString();
+            return `${index + 1}. #${snapshot.id} — ${snapshot.message} (${timestamp})`;
+        })
+        .join("\n");
+    const snapshotChoice = window.prompt(
+        `Snapshots for "${filePath}" (newest first):\n${snapshotList}\n\nEnter the number of the snapshot to roll back to:`,
+        "1",
+    );
+    if (snapshotChoice === null) return;
+
+    const index = parseInt(snapshotChoice, 10) - 1;
+    if (isNaN(index) || index < 0 || index >= snapshots.length) {
+        window.alert("Invalid selection.");
+        return;
+    }
+
+    const snapshotId = snapshots[index].id;
+    if (
+        !window.confirm(
+            `Roll back "${filePath}" to snapshot #${snapshotId}? This will create a new commit and cannot be undone automatically.`,
+        )
+    ) {
+        return;
+    }
+
+    isRollingBack.value = true;
+    try {
+        const response = await axios.post(generateOcsUrl("apps/gitcloud/rollback"), {
+            filePath,
+            snapshotId,
+        });
+        rollbackSuccessMessage.value = response.data.ocs.data.message;
+        await Promise.all([loadStatus(), loadDirectories()]);
+    } catch (error) {
+        rollbackError.value = extractErrorMessage(error, "Failed to roll back the selected file.");
+    } finally {
+        isRollingBack.value = false;
     }
 }
 </script>
@@ -152,6 +244,7 @@ async function commitSelectedDirectory() {
 
                 <div class="directories-panel">
                     <h2>Committed Directories</h2>
+                    <p v-if="directoriesError" class="status-error">{{ directoriesError }}</p>
                     <NcTextField
                         :model-value="searchTerm"
                         label="Search directories"
@@ -197,6 +290,8 @@ async function commitSelectedDirectory() {
                     <h2>Version Control</h2>
                     <p v-if="commitError" class="status-error">{{ commitError }}</p>
                     <p v-if="commitSuccessMessage" class="status-success">{{ commitSuccessMessage }}</p>
+                    <p v-if="rollbackError" class="status-error">{{ rollbackError }}</p>
+                    <p v-if="rollbackSuccessMessage" class="status-success">{{ rollbackSuccessMessage }}</p>
                     <div class="action-buttons">
                         <NcButton
                             variant="primary"
@@ -207,10 +302,10 @@ async function commitSelectedDirectory() {
                         </NcButton>
                         <NcButton
                             variant="secondary"
-                            disabled
-                            title="Rollback is not yet implemented (Phase 2.4)"
+                            :disabled="isRollingBack"
+                            @click="rollbackSelectedDirectory"
                         >
-                            ↩️ Rollback Snapshot
+                            {{ isRollingBack ? "Rolling back…" : "↩️ Rollback Snapshot" }}
                         </NcButton>
                     </div>
                 </div>

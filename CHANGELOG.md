@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-07-27
+
+### Added
+
+- `GET /apps/gitcloud/directories` and `VcsService::getCommittedDirectories` replace the dashboard's mock-derived committed-directories list: groups every file the user has ever committed (from `gitcloud_snapshots`) by directory, deduplicated and sorted, with files at the repository root grouped under `/`. The dashboard's Overview list and Directory Detail's file set (used by Commit/Rollback) are now both backed by this real data instead of the hardcoded mock array; both are refreshed after a successful commit or rollback.
+- Verified against a running instance: committing real files across the repository root and nested subdirectories produced correctly grouped, sorted directory entries; confirmed the full PHPUnit suite (21 tests) passes there.
+
+### Fixed
+
+- `VcsService::getCommittedDirectories` normalizes each file path's leading slash before adding it to its directory's file list (not just when computing which directory it belongs to), so a snapshot recorded with a leading-slash path no longer produces a duplicate-looking entry that doesn't match its own directory grouping. Caught by a unit test before it shipped.
+
+## [0.1.6] - 2026-07-27
+
+### Added
+
+- Phase 2.4 (Rollback Snapshot): `GET /apps/gitcloud/snapshots` lists a file's recorded snapshots newest-first; `POST /apps/gitcloud/rollback` restores a single file to a chosen snapshot's commit content via `git checkout <hash> -- <file>`, commits the restoration, and records a new `gitcloud_snapshots` row (status `rolled_back`, parented to the file's prior snapshot). Rejects requests for a snapshot that doesn't exist, belongs to another user, doesn't match the requested file, or would be a no-op (file already at that content).
+- Wired the dashboard's "Rollback Snapshot" button to the new endpoints: prompts for which file to roll back (when the selected directory has more than one), fetches and lists that file's snapshots via `window.prompt` (consistent with the existing `window.prompt`/`window.alert` commit-message flow), confirms before restoring, then calls `/rollback` and shows the result inline alongside the existing commit success/error messaging.
+- Verified end-to-end against a running instance (commit twice, list snapshots, roll back, confirm both the file content and git history reverted, plus the not-found/wrong-user/wrong-file/no-op edge cases each return a clear error) and confirmed the full PHPUnit suite (17 tests) passes there.
+
 ## [0.1.5] - 2026-07-06
 
 ### Added
