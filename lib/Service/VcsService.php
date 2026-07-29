@@ -190,6 +190,43 @@ class VcsService {
 	}
 
 	/**
+	 * Computes total size and Git status scoped to a specific set of files within
+	 * the repository rooted at $repositoryPath, for the dashboard's Directory Detail view.
+	 * @param string[] $relativeFilePaths
+	 * @return array{success: bool, message?: string, totalSizeBytes?: int, gitStatus?: string}
+	 */
+	public function getDirectoryStatus(string $repositoryPath, array $relativeFilePaths): array {
+		if (!is_dir($repositoryPath)) {
+			$this->logger->warning(sprintf('Repository path does not exist: %s', $repositoryPath));
+			return ['success' => false, 'message' => 'Repository path does not exist.'];
+		}
+
+		$totalSizeBytes = 0;
+		foreach ($relativeFilePaths as $filePath) {
+			$absolutePath = $repositoryPath . '/' . $filePath;
+			if (is_file($absolutePath)) {
+				$totalSizeBytes += filesize($absolutePath);
+			}
+		}
+
+		$gitStatus = 'Uninitialized';
+		if (is_dir($repositoryPath . '/.git')) {
+			if (empty($relativeFilePaths)) {
+				$gitStatus = 'Clean';
+			} else {
+				$statusResult = $this->runGit($repositoryPath, array_merge(['status', '--porcelain', '--'], $relativeFilePaths));
+				$gitStatus = ($statusResult['success'] && trim($statusResult['output']) === '') ? 'Clean' : 'Modified';
+			}
+		}
+
+		return [
+			'success' => true,
+			'totalSizeBytes' => $totalSizeBytes,
+			'gitStatus' => $gitStatus,
+		];
+	}
+
+	/**
 	 * Restores a single file to the content it had at a previously recorded snapshot,
 	 * then commits the restoration and records a new snapshot row for it.
 	 * @param string $repositoryPath Absolute local filesystem path to the repository's working tree.

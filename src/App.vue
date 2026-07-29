@@ -33,6 +33,25 @@ async function loadStatus() {
     }
 }
 
+const directoryTotalSizeMb = ref(0);
+const directoryGitStatus = ref("Loading…");
+const directoryStatusError = ref("");
+
+async function loadDirectoryStatus(directory: string) {
+    try {
+        const response = await axios.get(generateOcsUrl("apps/gitcloud/status"), {
+            params: { directory },
+        });
+        const data = response.data.ocs.data;
+        directoryTotalSizeMb.value = data.totalSizeMb;
+        directoryGitStatus.value = data.gitStatus;
+        directoryStatusError.value = "";
+    } catch (error) {
+        directoryGitStatus.value = "Unknown";
+        directoryStatusError.value = extractErrorMessage(error, "Failed to load directory status.");
+    }
+}
+
 function extractErrorMessage(error: unknown, fallback: string): string {
     const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
     return axiosError.response?.data?.ocs?.data?.message ?? fallback;
@@ -63,11 +82,14 @@ onMounted(() => {
 
 const searchTerm = ref("");
 
-const gitStatusVariant = computed<"clean" | "modified" | "unknown">(() => {
-    if (gitStatus.value === "Modified") return "modified";
-    if (gitStatus.value === "Clean") return "clean";
+function statusVariant(status: string): "clean" | "modified" | "unknown" {
+    if (status === "Modified") return "modified";
+    if (status === "Clean") return "clean";
     return "unknown";
-});
+}
+
+const gitStatusVariant = computed(() => statusVariant(gitStatus.value));
+const directoryGitStatusVariant = computed(() => statusVariant(directoryGitStatus.value));
 
 const selectedDirectory = ref<string | null>(null); // null = Overview
 
@@ -94,6 +116,7 @@ const selectedFiles = ref<Set<string>>(new Set());
 function selectDirectory(dir: string) {
     selectedDirectory.value = dir;
     selectedFiles.value = new Set();
+    loadDirectoryStatus(dir);
 }
 
 function deselectDirectory() {
@@ -127,7 +150,11 @@ function openCommitForSelection() {
 
 function onCommitted() {
     clearFileSelection();
-    Promise.all([loadStatus(), loadDirectories()]);
+    const refreshes = [loadStatus(), loadDirectories()];
+    if (selectedDirectory.value) {
+        refreshes.push(loadDirectoryStatus(selectedDirectory.value));
+    }
+    Promise.all(refreshes);
 }
 
 const rollbackPanelOpen = ref(false);
@@ -139,7 +166,11 @@ function openRollbackForFile(file: string) {
 }
 
 function onRolledBack() {
-    Promise.all([loadStatus(), loadDirectories()]);
+    const refreshes = [loadStatus(), loadDirectories()];
+    if (selectedDirectory.value) {
+        refreshes.push(loadDirectoryStatus(selectedDirectory.value));
+    }
+    Promise.all(refreshes);
 }
 </script>
 
@@ -221,18 +252,22 @@ function onRolledBack() {
                 </NcButton>
                 <h2>{{ directoryLabel(selectedDirectory) }}</h2>
 
+                <p v-if="directoryStatusError" class="banner banner--error">{{ directoryStatusError }}</p>
+
                 <section class="stats-grid stats-grid--detail">
                     <div class="stat-card">
                         <div class="stat-card__label">Files in Directory</div>
                         <div class="stat-card__value">{{ selectedDirectoryFileCount }}</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-card__label">
-                            Status <span class="stat-card__label-suffix">(repo-wide)</span>
-                        </div>
+                        <div class="stat-card__label">Total Size</div>
+                        <div class="stat-card__value">{{ directoryTotalSizeMb }} MB</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card__label">Status</div>
                         <div class="stat-card__status">
-                            <span class="status-dot" :class="`status-dot--${gitStatusVariant}`" />
-                            <span class="stat-card__value stat-card__value--status">{{ gitStatus }}</span>
+                            <span class="status-dot" :class="`status-dot--${directoryGitStatusVariant}`" />
+                            <span class="stat-card__value stat-card__value--status">{{ directoryGitStatus }}</span>
                         </div>
                     </div>
                 </section>
@@ -323,8 +358,8 @@ h2 {
 }
 
 .stats-grid--detail {
-    grid-template-columns: repeat(2, 1fr);
-    max-width: 520px;
+    grid-template-columns: repeat(3, 1fr);
+    max-width: 720px;
     margin-bottom: 28px;
 }
 
@@ -341,12 +376,6 @@ h2 {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin-bottom: 8px;
-}
-
-.stat-card__label-suffix {
-    text-transform: none;
-    letter-spacing: normal;
-    font-weight: 400;
 }
 
 .stat-card__value {

@@ -232,6 +232,93 @@ final class VcsServiceTest extends TestCase {
 		$this->assertFalse($result['success']);
 	}
 
+	public function testGetDirectoryStatusSumsSizeOfGivenFilesOnly(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		mkdir($this->tmpRepoPath . '/folder');
+		file_put_contents($this->tmpRepoPath . '/folder/a.txt', str_repeat('a', 10));
+		file_put_contents($this->tmpRepoPath . '/folder/b.txt', str_repeat('b', 20));
+		file_put_contents($this->tmpRepoPath . '/other.txt', str_repeat('c', 1000));
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->getDirectoryStatus($this->tmpRepoPath, ['folder/a.txt', 'folder/b.txt']);
+
+		$this->assertTrue($result['success']);
+		$this->assertSame(30, $result['totalSizeBytes']);
+	}
+
+	public function testGetDirectoryStatusReturnsUninitializedWhenNoGitRepository(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		file_put_contents($this->tmpRepoPath . '/a.txt', 'hello');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->getDirectoryStatus($this->tmpRepoPath, ['a.txt']);
+
+		$this->assertTrue($result['success']);
+		$this->assertSame('Uninitialized', $result['gitStatus']);
+	}
+
+	public function testGetDirectoryStatusReportsCleanWhenOnlyFilesOutsideDirectoryAreModified(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		mkdir($this->tmpRepoPath . '/folder');
+		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'original');
+		file_put_contents($this->tmpRepoPath . '/other.txt', 'original');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		// Modify a file outside the scoped directory only.
+		file_put_contents($this->tmpRepoPath . '/other.txt', 'changed');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->getDirectoryStatus($this->tmpRepoPath, ['folder/a.txt']);
+
+		$this->assertTrue($result['success']);
+		$this->assertSame('Clean', $result['gitStatus']);
+	}
+
+	public function testGetDirectoryStatusReportsModifiedWhenScopedFileIsChanged(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		mkdir($this->tmpRepoPath . '/folder');
+		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'original');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'changed');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->getDirectoryStatus($this->tmpRepoPath, ['folder/a.txt']);
+
+		$this->assertTrue($result['success']);
+		$this->assertSame('Modified', $result['gitStatus']);
+	}
+
 	public function testGetCommittedDirectoriesGroupsFilesByDirectorySortedWithRootLast(): void {
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-07-29
+
+### Added
+
+- Directory Detail's Total Size and Status stats are now scoped to the selected directory instead of reflecting the whole repository. `GET /apps/gitcloud/status` accepts an optional `directory` query param; when given, `VcsService::getDirectoryStatus` sums the sizes of just that directory's still-existing committed files and runs `git status --porcelain -- <files>` scoped to them, instead of walking/statusing the entire repository. The dashboard now fetches this alongside the existing file-count stat whenever a directory is selected, refreshing it after each commit/rollback like the other stats. The "(repo-wide)" caveat label is gone since Status is now accurate per-directory.
+
 ## [0.1.8] - 2026-07-29
 
 ### Fixed

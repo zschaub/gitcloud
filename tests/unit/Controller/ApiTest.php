@@ -340,4 +340,117 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(401, $response->getStatus());
 	}
+
+	public function testGetStatusReturnsWholeRepositoryStatsWithoutDirectoryParam(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->once())
+			->method('getRepositoryStatus')
+			->with('/data/testuser/files')
+			->willReturn([
+				'success' => true,
+				'fileCount' => 5,
+				'dirCount' => 2,
+				'totalSizeBytes' => 2 * 1024 * 1024,
+				'gitStatus' => 'Clean',
+			]);
+		$vcsService->expects($this->never())->method('getDirectoryStatus');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->getStatus();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(5, $response->getData()['fileCount']);
+		$this->assertEquals(2, $response->getData()['dirCount']);
+		$this->assertEquals(2.0, $response->getData()['totalSizeMb']);
+		$this->assertEquals('Clean', $response->getData()['gitStatus']);
+	}
+
+	public function testGetStatusScopesStatsToDirectoryWhenGiven(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['folder/a.txt', true],
+			['folder/deleted.txt', false],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => '/', 'files' => ['readme.txt']],
+				['path' => 'folder', 'files' => ['folder/a.txt', 'folder/deleted.txt']],
+			]);
+		$vcsService->expects($this->once())
+			->method('getDirectoryStatus')
+			->with('/data/testuser/files', ['folder/a.txt'])
+			->willReturn([
+				'success' => true,
+				'totalSizeBytes' => 512 * 1024,
+				'gitStatus' => 'Modified',
+			]);
+		$vcsService->expects($this->never())->method('getRepositoryStatus');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->getStatus('folder');
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(1, $response->getData()['fileCount']);
+		$this->assertEquals(0, $response->getData()['dirCount']);
+		$this->assertEquals(0.5, $response->getData()['totalSizeMb']);
+		$this->assertEquals('Modified', $response->getData()['gitStatus']);
+	}
+
+	public function testGetStatusFailsWhenNoUserIsLoggedIn(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn(null);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->getStatus();
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(401, $response->getStatus());
+	}
 }

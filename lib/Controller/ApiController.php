@@ -124,8 +124,12 @@ class ApiController extends OCSController {
 
 	/**
 	 * Returns live dashboard stats (file/dir counts, total size, Git status)
-	 * for the current user's GitCloud repository.
+	 * for the current user's GitCloud repository. When $directory is given, the
+	 * total size and Git status are scoped to that directory's still-existing
+	 * committed files instead of the whole repository; dirCount is not meaningful
+	 * for a single directory and is always 0 in that case.
 	 *
+	 * @param string $directory Directory path (as returned by /directories) to scope stats to; empty for the whole repository.
 	 * @return DataResponse<Http::STATUS_OK, array{status: string, fileCount: int, dirCount: int, totalSizeMb: float, gitStatus: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
 	 * 200: Status computed and returned.
@@ -134,7 +138,7 @@ class ApiController extends OCSController {
 	 */
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'GET', url: '/status')]
-	public function getStatus(): DataResponse {
+	public function getStatus(string $directory = ''): DataResponse {
 		$userFolder = $this->getUserFolderOrErrorResponse();
 		if ($userFolder instanceof DataResponse) {
 			return $userFolder;
@@ -145,7 +149,34 @@ class ApiController extends OCSController {
 			return $repositoryPath;
 		}
 
-		$result = $this->vcsService->getRepositoryStatus($repositoryPath);
+		if ($directory === '') {
+			$result = $this->vcsService->getRepositoryStatus($repositoryPath);
+			if (!$result['success']) {
+				return new DataResponse(
+					[
+						'status' => 'error',
+						'message' => $result['message'],
+					],
+					Http::STATUS_BAD_REQUEST,
+				);
+			}
+
+			return new DataResponse(
+				[
+					'status' => 'success',
+					'fileCount' => $result['fileCount'],
+					'dirCount' => $result['dirCount'],
+					'totalSizeMb' => round($result['totalSizeBytes'] / 1024 / 1024, 1),
+					'gitStatus' => $result['gitStatus'],
+				],
+				Http::STATUS_OK,
+			);
+		}
+
+		$userId = $this->userSession->getUser()->getUID();
+		$existingFiles = $this->resolveExistingFilesForDirectory($userFolder, $userId, $directory);
+
+		$result = $this->vcsService->getDirectoryStatus($repositoryPath, $existingFiles);
 		if (!$result['success']) {
 			return new DataResponse(
 				[
@@ -159,8 +190,8 @@ class ApiController extends OCSController {
 		return new DataResponse(
 			[
 				'status' => 'success',
-				'fileCount' => $result['fileCount'],
-				'dirCount' => $result['dirCount'],
+				'fileCount' => count($existingFiles),
+				'dirCount' => 0,
 				'totalSizeMb' => round($result['totalSizeBytes'] / 1024 / 1024, 1),
 				'gitStatus' => $result['gitStatus'],
 			],
@@ -192,10 +223,7 @@ class ApiController extends OCSController {
 			// Snapshot rows for a file are kept even after the file itself is
 			// deleted from Nextcloud, so this list must be filtered against
 			// what's still actually on disk or it'll show ghost entries.
-			$existingFiles = array_values(array_filter(
-				$directory['files'],
-				static fn (string $filePath): bool => $userFolder->nodeExists($filePath),
-			));
+			$existingFiles = $this->filterExistingFiles($userFolder, $directory['files']);
 
 			if ($existingFiles !== []) {
 				$directories[] = ['path' => $directory['path'], 'files' => $existingFiles];
@@ -343,6 +371,32 @@ class ApiController extends OCSController {
 			],
 			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
 		);
+	}
+
+	/**
+	 * Returns the still-existing committed files under the given directory for a user,
+	 * filtering out any that have since been deleted from Nextcloud.
+	 * @return string[]
+	 */
+	private function resolveExistingFilesForDirectory(Folder $userFolder, string $userId, string $directory): array {
+		foreach ($this->vcsService->getCommittedDirectories($userId) as $committedDirectory) {
+			if ($committedDirectory['path'] === $directory) {
+				return $this->filterExistingFiles($userFolder, $committedDirectory['files']);
+			}
+		}
+
+		return [];
+	}
+
+	/**
+	 * @param string[] $filePaths
+	 * @return string[]
+	 */
+	private function filterExistingFiles(Folder $userFolder, array $filePaths): array {
+		return array_values(array_filter(
+			$filePaths,
+			static fn (string $filePath): bool => $userFolder->nodeExists($filePath),
+		));
 	}
 
 	/**
