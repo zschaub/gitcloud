@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-07-29
+
+### Fixed
+
+- `GET /apps/gitcloud/directories` no longer lists files/directories that have been deleted from Nextcloud since they were last committed. `gitcloud_snapshots` rows are kept forever for history purposes, but the API now filters each directory's file list against `Folder::nodeExists()` and drops any directory left with no existing files, so deleted items stop showing up as "ghost" entries in the dashboard.
+
+### Added
+
+- Redesigned the dashboard (`src/App.vue`) and the Files-app "Add to GitCloud" right-click action (`src/fileActions/addToGitCloud.js`) around a shared `CommitDialog.vue` (`NcDialog`-based commit modal) and a new `RollbackPanel.vue` (per-file snapshot timeline drawer), replacing every `window.prompt`/`alert`/`confirm` call in both entry points with real `@nextcloud/vue` UI.
+- Commit is now file-scoped instead of whole-directory: Directory Detail shows a checkbox per file, a bottom selection bar ("N file(s) selected" / Clear / "Commit Changes…") opens `CommitDialog` pre-filled with just the checked files. The same dialog, pre-filled with the single right-clicked file, now backs the Files-app action, so there is one commit UI instead of two.
+- Each file in Directory Detail has a "History" button opening `RollbackPanel`, a right-hand drawer listing that file's `GET /apps/gitcloud/snapshots` entries newest-first as a connected timeline (commit message, Committed/Rolled back pill, relative + absolute time, short hash). Every snapshot but the newest gets a "Rollback to this snapshot" button that opens a small confirm dialog before calling `POST /apps/gitcloud/rollback`; the result renders inline in the still-open panel.
+- Overview gained a 4-stat card grid (Files Tracked, Directories, Total Size, Status with a colored dot) and dedicated empty ("No directories tracked yet…") and no-search-match states for the Committed Directories list; Directory Detail's Status card is explicitly labeled "(repo-wide)" since it isn't yet scoped to the selected directory (known backend gap, unchanged from prior releases).
+- `.dashboard-container` no longer force-locks to a light theme — the hardcoded `--color-*` overrides are removed and the dashboard now inherits Nextcloud's real theme variables throughout, so it follows the instance's active light/dark theme like the rest of the UI.
+
+### Note
+
+- Per-file Modified/Unchanged status (considered for the Directory Detail file list during this redesign) was intentionally left out: `GET /apps/gitcloud/directories` has no per-file status field to back it, and shipping a fabricated one would misrepresent real repository state. Flagged as a follow-up: add a real `status` field per file to the `/directories` response.
+
 ## [0.1.7] - 2026-07-27
 
 ### Added

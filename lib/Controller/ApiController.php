@@ -181,21 +181,31 @@ class ApiController extends OCSController {
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'GET', url: '/directories')]
 	public function getDirectories(): DataResponse {
-		$user = $this->userSession->getUser();
-		if ($user === null) {
-			return new DataResponse(
-				[
-					'status' => 'error',
-					'message' => 'No user is logged in.',
-				],
-				Http::STATUS_UNAUTHORIZED,
-			);
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		$userId = $this->userSession->getUser()->getUID();
+		$directories = [];
+		foreach ($this->vcsService->getCommittedDirectories($userId) as $directory) {
+			// Snapshot rows for a file are kept even after the file itself is
+			// deleted from Nextcloud, so this list must be filtered against
+			// what's still actually on disk or it'll show ghost entries.
+			$existingFiles = array_values(array_filter(
+				$directory['files'],
+				static fn (string $filePath): bool => $userFolder->nodeExists($filePath),
+			));
+
+			if ($existingFiles !== []) {
+				$directories[] = ['path' => $directory['path'], 'files' => $existingFiles];
+			}
 		}
 
 		return new DataResponse(
 			[
 				'status' => 'success',
-				'directories' => $this->vcsService->getCommittedDirectories($user->getUID()),
+				'directories' => $directories,
 			],
 			Http::STATUS_OK,
 		);

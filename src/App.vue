@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import NcAppContent from "@nextcloud/vue/components/NcAppContent";
 import NcTextField from "@nextcloud/vue/components/NcTextField";
-import NcListItem from "@nextcloud/vue/components/NcListItem";
 import NcButton from "@nextcloud/vue/components/NcButton";
+import CommitDialog from "./components/CommitDialog.vue";
+import RollbackPanel from "./components/RollbackPanel.vue";
+import FolderOutlineIcon from "@mdi/svg/svg/folder-outline.svg?raw";
+import ChevronRightIcon from "@mdi/svg/svg/chevron-right.svg?raw";
+import FileDocumentOutlineIcon from "@mdi/svg/svg/file-document-outline.svg?raw";
+import ClockOutlineIcon from "@mdi/svg/svg/clock-outline.svg?raw";
 import { ref, computed, onMounted } from "vue";
 import axios from "@nextcloud/axios";
 import { generateOcsUrl } from "@nextcloud/router";
@@ -58,16 +63,22 @@ onMounted(() => {
 
 const searchTerm = ref("");
 
-const hasUncommittedChanges = computed(() => gitStatus.value === "Modified");
+const gitStatusVariant = computed<"clean" | "modified" | "unknown">(() => {
+    if (gitStatus.value === "Modified") return "modified";
+    if (gitStatus.value === "Clean") return "clean";
+    return "unknown";
+});
 
 const selectedDirectory = ref<string | null>(null); // null = Overview
 
-const committedDirectories = computed(() => directories.value.map((dir) => dir.path));
+function directoryLabel(path: string): string {
+    return path === "/" ? "Root" : path;
+}
 
 const filteredDirectories = computed(() => {
-    if (!searchTerm.value) return committedDirectories.value;
-    return committedDirectories.value.filter((dir) =>
-        dir.toLowerCase().includes(searchTerm.value.toLowerCase()),
+    if (!searchTerm.value) return directories.value;
+    return directories.value.filter((dir) =>
+        directoryLabel(dir.path).toLowerCase().includes(searchTerm.value.toLowerCase()),
     );
 });
 
@@ -78,352 +89,497 @@ const selectedDirectoryFiles = computed(() => {
 
 const selectedDirectoryFileCount = computed(() => selectedDirectoryFiles.value.length);
 
+const selectedFiles = ref<Set<string>>(new Set());
+
 function selectDirectory(dir: string) {
     selectedDirectory.value = dir;
+    selectedFiles.value = new Set();
 }
 
 function deselectDirectory() {
     selectedDirectory.value = null;
+    selectedFiles.value = new Set();
 }
 
-const isCommitting = ref(false);
-const commitError = ref("");
-const commitSuccessMessage = ref("");
-
-async function commitSelectedDirectory() {
-    if (!selectedDirectory.value) return;
-
-    const message = window.prompt(
-        `Commit message for "${selectedDirectory.value}":`,
-        "",
-    );
-    if (message === null) return;
-    if (message.trim() === "") {
-        window.alert("A commit message is required.");
-        return;
-    }
-
-    isCommitting.value = true;
-    commitError.value = "";
-    commitSuccessMessage.value = "";
-    try {
-        const response = await axios.post(generateOcsUrl("apps/gitcloud/commit"), {
-            files: selectedDirectoryFiles.value,
-            message,
-        });
-        commitSuccessMessage.value = response.data.ocs.data.message;
-        await Promise.all([loadStatus(), loadDirectories()]);
-    } catch (error) {
-        commitError.value = extractErrorMessage(error, "Failed to commit changes to GitCloud.");
-    } finally {
-        isCommitting.value = false;
-    }
-}
-
-const isRollingBack = ref(false);
-const rollbackError = ref("");
-const rollbackSuccessMessage = ref("");
-
-async function rollbackSelectedDirectory() {
-    if (!selectedDirectory.value || selectedDirectoryFiles.value.length === 0) return;
-
-    rollbackError.value = "";
-    rollbackSuccessMessage.value = "";
-
-    let filePath: string;
-    if (selectedDirectoryFiles.value.length === 1) {
-        filePath = selectedDirectoryFiles.value[0];
+function toggleFileSelection(file: string) {
+    const next = new Set(selectedFiles.value);
+    if (next.has(file)) {
+        next.delete(file);
     } else {
-        const fileList = selectedDirectoryFiles.value
-            .map((file, index) => `${index + 1}. ${file}`)
-            .join("\n");
-        const choice = window.prompt(
-            `Which file do you want to roll back?\n${fileList}\n\nEnter the file path exactly as shown above:`,
-            selectedDirectoryFiles.value[0],
-        );
-        if (choice === null) return;
-        if (!selectedDirectoryFiles.value.includes(choice)) {
-            window.alert("Please enter one of the listed file paths exactly.");
-            return;
-        }
-        filePath = choice;
+        next.add(file);
     }
+    selectedFiles.value = next;
+}
 
-    isRollingBack.value = true;
-    let snapshots: { id: number; message: string; createdAt: number }[];
-    try {
-        const response = await axios.get(generateOcsUrl("apps/gitcloud/snapshots"), {
-            params: { filePath },
-        });
-        snapshots = response.data.ocs.data.snapshots;
-    } catch (error) {
-        rollbackError.value = extractErrorMessage(error, "Failed to load snapshots for the selected file.");
-        isRollingBack.value = false;
-        return;
-    }
-    isRollingBack.value = false;
+function clearFileSelection() {
+    selectedFiles.value = new Set();
+}
 
-    if (!snapshots.length) {
-        window.alert(`No snapshots found for "${filePath}".`);
-        return;
-    }
+const selectedFileCount = computed(() => selectedFiles.value.size);
 
-    const snapshotList = snapshots
-        .map((snapshot, index) => {
-            const timestamp = new Date(snapshot.createdAt * 1000).toLocaleString();
-            return `${index + 1}. #${snapshot.id} — ${snapshot.message} (${timestamp})`;
-        })
-        .join("\n");
-    const snapshotChoice = window.prompt(
-        `Snapshots for "${filePath}" (newest first):\n${snapshotList}\n\nEnter the number of the snapshot to roll back to:`,
-        "1",
-    );
-    if (snapshotChoice === null) return;
+const commitDialogOpen = ref(false);
+const commitDialogFiles = ref<string[]>([]);
 
-    const index = parseInt(snapshotChoice, 10) - 1;
-    if (isNaN(index) || index < 0 || index >= snapshots.length) {
-        window.alert("Invalid selection.");
-        return;
-    }
+function openCommitForSelection() {
+    commitDialogFiles.value = Array.from(selectedFiles.value);
+    commitDialogOpen.value = true;
+}
 
-    const snapshotId = snapshots[index].id;
-    if (
-        !window.confirm(
-            `Roll back "${filePath}" to snapshot #${snapshotId}? This will create a new commit and cannot be undone automatically.`,
-        )
-    ) {
-        return;
-    }
+function onCommitted() {
+    clearFileSelection();
+    Promise.all([loadStatus(), loadDirectories()]);
+}
 
-    isRollingBack.value = true;
-    try {
-        const response = await axios.post(generateOcsUrl("apps/gitcloud/rollback"), {
-            filePath,
-            snapshotId,
-        });
-        rollbackSuccessMessage.value = response.data.ocs.data.message;
-        await Promise.all([loadStatus(), loadDirectories()]);
-    } catch (error) {
-        rollbackError.value = extractErrorMessage(error, "Failed to roll back the selected file.");
-    } finally {
-        isRollingBack.value = false;
-    }
+const rollbackPanelOpen = ref(false);
+const rollbackPanelFilePath = ref<string | null>(null);
+
+function openRollbackForFile(file: string) {
+    rollbackPanelFilePath.value = file;
+    rollbackPanelOpen.value = true;
+}
+
+function onRolledBack() {
+    Promise.all([loadStatus(), loadDirectories()]);
 }
 </script>
 
 <template>
     <NcAppContent app-name="gitcloud">
         <div class="dashboard-container">
-            <h1>Git Dashboard</h1>
-
-            <p v-if="statusError" class="status-error">{{ statusError }}</p>
+            <p v-if="statusError" class="banner banner--error">{{ statusError }}</p>
 
             <!-- State A: Overview -->
             <template v-if="!selectedDirectory">
+                <h1>Git Dashboard</h1>
+
                 <section class="stats-grid">
                     <div class="stat-card">
-                        <h3>Files Tracked</h3>
-                        <p>{{ fileCount }}</p>
+                        <div class="stat-card__label">Files Tracked</div>
+                        <div class="stat-card__value">{{ fileCount }}</div>
                     </div>
                     <div class="stat-card">
-                        <h3>Directories</h3>
-                        <p>{{ dirCount }}</p>
+                        <div class="stat-card__label">Directories</div>
+                        <div class="stat-card__value">{{ dirCount }}</div>
                     </div>
                     <div class="stat-card">
-                        <h3>Total Size</h3>
-                        <p>{{ totalSizeMb }} MB</p>
+                        <div class="stat-card__label">Total Size</div>
+                        <div class="stat-card__value">{{ totalSizeMb }} MB</div>
                     </div>
-                    <div
-                        class="stat-card status-indicator"
-                        :class="{ 'status-modified': hasUncommittedChanges }"
-                    >
-                        <h3>Status</h3>
-                        <p>{{ gitStatus }}</p>
+                    <div class="stat-card">
+                        <div class="stat-card__label">Status</div>
+                        <div class="stat-card__status">
+                            <span class="status-dot" :class="`status-dot--${gitStatusVariant}`" />
+                            <span class="stat-card__value stat-card__value--status">{{ gitStatus }}</span>
+                        </div>
                     </div>
                 </section>
 
-                <div class="directories-panel">
-                    <h2>Committed Directories</h2>
-                    <p v-if="directoriesError" class="status-error">{{ directoriesError }}</p>
-                    <NcTextField
-                        :model-value="searchTerm"
-                        label="Search directories"
-                        placeholder="Search directories…"
-                        @update:model-value="searchTerm = String($event)"
-                    />
-                    <ul v-if="filteredDirectories.length" class="directory-list">
-                        <NcListItem
-                            v-for="dir in filteredDirectories"
-                            :key="dir"
-                            :name="dir"
-                            @click="selectDirectory(dir)"
+                <p v-if="directoriesError" class="banner banner--error">{{ directoriesError }}</p>
+
+                <template v-if="directories.length === 0">
+                    <div class="empty-panel">
+                        <span class="empty-panel__icon" v-html="FolderOutlineIcon" />
+                        <div class="empty-panel__title">No directories tracked yet</div>
+                        <div class="empty-panel__copy">
+                            Right-click a file in the Files app and choose "Add to GitCloud" to make your first
+                            commit — it'll show up here.
+                        </div>
+                    </div>
+                </template>
+                <div v-else class="directories-panel">
+                    <div class="directories-panel__header">
+                        <h2>Committed Directories</h2>
+                        <NcTextField
+                            class="directories-panel__search"
+                            :model-value="searchTerm"
+                            label="Search directories"
+                            placeholder="Search directories…"
+                            @update:model-value="searchTerm = String($event)"
                         />
+                    </div>
+                    <ul v-if="filteredDirectories.length" class="directory-list">
+                        <li
+                            v-for="dir in filteredDirectories"
+                            :key="dir.path"
+                            class="directory-row"
+                            @click="selectDirectory(dir.path)"
+                        >
+                            <span class="directory-row__icon" v-html="FolderOutlineIcon" />
+                            <span class="directory-row__label">{{ directoryLabel(dir.path) }}</span>
+                            <span class="directory-row__pill">{{ dir.files.length }} files</span>
+                            <span class="directory-row__chevron" v-html="ChevronRightIcon" />
+                        </li>
                     </ul>
-                    <p v-else>No directories found.</p>
+                    <p v-else class="no-match">No directories match "{{ searchTerm }}".</p>
                 </div>
             </template>
 
             <!-- State B: Directory Detail -->
             <template v-else>
-                <div class="detail-header">
-                    <NcButton variant="tertiary" @click="deselectDirectory">
-                        ← Back to Overview
-                    </NcButton>
-                    <h2>{{ selectedDirectory }}</h2>
-                </div>
+                <NcButton variant="tertiary" class="back-button" @click="deselectDirectory">
+                    ← Back to Overview
+                </NcButton>
+                <h2>{{ directoryLabel(selectedDirectory) }}</h2>
 
-                <section class="stats-grid">
+                <section class="stats-grid stats-grid--detail">
                     <div class="stat-card">
-                        <h3>Files in Directory</h3>
-                        <p>{{ selectedDirectoryFileCount }}</p>
+                        <div class="stat-card__label">Files in Directory</div>
+                        <div class="stat-card__value">{{ selectedDirectoryFileCount }}</div>
                     </div>
-                    <div
-                        class="stat-card status-indicator"
-                        :class="{ 'status-modified': hasUncommittedChanges }"
-                    >
-                        <h3>Status</h3>
-                        <p>{{ gitStatus }}</p>
+                    <div class="stat-card">
+                        <div class="stat-card__label">
+                            Status <span class="stat-card__label-suffix">(repo-wide)</span>
+                        </div>
+                        <div class="stat-card__status">
+                            <span class="status-dot" :class="`status-dot--${gitStatusVariant}`" />
+                            <span class="stat-card__value stat-card__value--status">{{ gitStatus }}</span>
+                        </div>
                     </div>
                 </section>
 
-                <div class="controls-panel">
-                    <h2>Version Control</h2>
-                    <p v-if="commitError" class="status-error">{{ commitError }}</p>
-                    <p v-if="commitSuccessMessage" class="status-success">{{ commitSuccessMessage }}</p>
-                    <p v-if="rollbackError" class="status-error">{{ rollbackError }}</p>
-                    <p v-if="rollbackSuccessMessage" class="status-success">{{ rollbackSuccessMessage }}</p>
-                    <div class="action-buttons">
-                        <NcButton
-                            variant="primary"
-                            :disabled="isCommitting"
-                            @click="commitSelectedDirectory"
-                        >
-                            {{ isCommitting ? "Committing…" : "✨ Commit Changes" }}
-                        </NcButton>
-                        <NcButton
-                            variant="secondary"
-                            :disabled="isRollingBack"
-                            @click="rollbackSelectedDirectory"
-                        >
-                            {{ isRollingBack ? "Rolling back…" : "↩️ Rollback Snapshot" }}
-                        </NcButton>
-                    </div>
+                <div class="files-panel">
+                    <h2>Files</h2>
+                    <ul class="file-list">
+                        <li v-for="file in selectedDirectoryFiles" :key="file" class="file-row">
+                            <input
+                                type="checkbox"
+                                class="file-row__checkbox"
+                                :checked="selectedFiles.has(file)"
+                                @change="toggleFileSelection(file)"
+                            />
+                            <span class="file-row__icon" v-html="FileDocumentOutlineIcon" />
+                            <span class="file-row__name">{{ file }}</span>
+                            <NcButton variant="tertiary" @click="openRollbackForFile(file)">
+                                <template #icon>
+                                    <span class="file-row__history-icon" v-html="ClockOutlineIcon" />
+                                </template>
+                                History
+                            </NcButton>
+                        </li>
+                    </ul>
                 </div>
             </template>
         </div>
+
+        <div v-if="selectedFileCount > 0" class="selection-bar">
+            <span class="selection-bar__count">{{ selectedFileCount }} file(s) selected</span>
+            <NcButton variant="tertiary" @click="clearFileSelection">Clear</NcButton>
+            <NcButton variant="primary" class="selection-bar__commit" @click="openCommitForSelection">
+                Commit Changes…
+            </NcButton>
+        </div>
+
+        <CommitDialog
+            :open="commitDialogOpen"
+            :files="commitDialogFiles"
+            @update:open="commitDialogOpen = $event"
+            @committed="onCommitted"
+        />
+
+        <RollbackPanel
+            :open="rollbackPanelOpen"
+            :file-path="rollbackPanelFilePath"
+            @update:open="rollbackPanelOpen = $event"
+            @rolled-back="onRolledBack"
+        />
     </NcAppContent>
 </template>
 
 <style scoped>
 .dashboard-container {
-    padding: 20px;
+    padding: 32px 40px 90px;
     min-height: 100%;
-    background-color: var(
-        --nextcloud-theme-page-background,
-        #f8f9fa
-    ) !important;
-    border-radius: 6px;
-    border: 1px solid var(--nextcloud-theme-card-background-color);
-
-    /* Several @nextcloud/vue components (NcTextField, NcListItem, NcButton's
-       tertiary variant) read these real Nextcloud theme variables and/or
-       inherit `color` from them, which otherwise follow the instance's
-       active (possibly dark) theme and clash with this dashboard's
-       always-light styling above. Redeclaring `color` (not just the custom
-       property) ensures descendants that don't set their own color, like
-       NcListItem's name text or a tertiary NcButton's label, inherit the
-       light-mode value from here instead of a dark-theme value computed
-       higher up the tree. */
-    --color-main-background: #ffffff;
-    --color-main-text: #222222;
-    --color-text-maxcontrast: #767676;
-    --color-border-maxcontrast: #cccccc;
-    --input-border-color: #cccccc;
-    --color-background-hover: #f5f5f5;
-    color: var(--color-main-text);
 }
 
 h1 {
-    border-bottom: 1px solid var(--nextcloud-theme-border-color, #ccc);
-    padding-bottom: 10px;
-    margin-bottom: 30px;
-    color: var(--nextcloud-theme-primary-text-color, #222222);
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 24px;
 }
 
 h2 {
-    color: var(--nextcloud-theme-primary-text-color, #222222);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.banner {
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.banner--error {
+    background-color: color-mix(in srgb, var(--color-error) 15%, transparent);
+    color: var(--color-error);
 }
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 20px;
-    margin-bottom: 40px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+.stats-grid--detail {
+    grid-template-columns: repeat(2, 1fr);
+    max-width: 520px;
+    margin-bottom: 28px;
 }
 
 .stat-card {
-    padding: 15px;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    background-color: var(--nc-card-background-color, #fff);
+    background-color: var(--color-main-background);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 18px 20px;
 }
 
-.stat-card h3 {
-    font-size: 0.9em;
-    color: var(--nextcloud-theme-primary-text-color, #1e1e1e);
-    margin-bottom: 5px;
+.stat-card__label {
+    font-size: 12px;
+    color: var(--color-text-maxcontrast);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
 }
 
-.stat-card p {
-    font-size: 1.8em;
-    font-weight: bold;
-    color: var(--nextcloud-theme-primary-text-color, #222222);
+.stat-card__label-suffix {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
 }
 
-.status-indicator p {
-    font-size: 2em;
+.stat-card__value {
+    font-size: 26px;
+    font-weight: 700;
 }
 
-.status-modified {
-    border-left: 5px solid var(--nextcloud-theme-warning-color, orange);
+.stat-card__status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
-.status-error {
-    color: var(--nextcloud-theme-error-color, #d32f2f);
-    margin-bottom: 20px;
+.stat-card__value--status {
+    font-size: 18px;
 }
 
-.status-success {
-    color: var(--nextcloud-theme-success-color, #2e7d32);
-    margin-bottom: 20px;
+.status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: none;
 }
 
-.controls-panel,
-.directories-panel {
-    padding: 20px;
-    background-color: var(--nextcloud-theme-main-background, #ffffff);
-    border-radius: 6px;
+.status-dot--clean {
+    background-color: var(--color-text-maxcontrast);
 }
 
-.directories-panel {
-    margin-bottom: 20px;
+.status-dot--modified {
+    background-color: var(--color-warning);
 }
 
-.directory-list {
+.status-dot--unknown {
+    background-color: var(--color-text-maxcontrast);
+}
+
+.empty-panel {
+    background-color: var(--color-main-background);
+    border: 1px dashed var(--color-border);
+    border-radius: 12px;
+    padding: 48px 32px;
+    text-align: center;
+}
+
+.empty-panel__icon {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    margin-bottom: 16px;
+    color: var(--color-text-maxcontrast);
+}
+
+.empty-panel__icon :deep(svg) {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+}
+
+.empty-panel__title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.empty-panel__copy {
+    font-size: 14px;
+    color: var(--color-text-maxcontrast);
+    max-width: 380px;
+    margin: 0 auto;
+}
+
+.directories-panel,
+.files-panel {
+    background-color: var(--color-main-background);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.directories-panel__header {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.directories-panel__header h2 {
+    margin: 0 0 12px;
+}
+
+.directories-panel__search {
+    max-width: 320px;
+}
+
+.files-panel h2 {
+    margin: 0;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.directory-list,
+.file-list {
     list-style: none;
+    margin: 0;
     padding: 0;
-    margin-top: 10px;
 }
 
-.detail-header {
+.directory-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 20px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--color-border);
+    cursor: pointer;
 }
 
-.action-buttons {
+.directory-row:last-child {
+    border-bottom: none;
+}
+
+.directory-row:hover {
+    background-color: var(--color-background-hover);
+}
+
+.directory-row__icon,
+.file-row__icon {
     display: flex;
-    gap: 15px;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    color: var(--color-text-maxcontrast);
+}
+
+.directory-row__icon :deep(svg),
+.file-row__icon :deep(svg) {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+}
+
+.directory-row__label {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.directory-row__pill {
+    font-size: 12px;
+    color: var(--color-text-maxcontrast);
+    background-color: var(--color-background-hover);
+    padding: 3px 9px;
+    border-radius: 20px;
+}
+
+.directory-row__chevron {
+    display: flex;
+    width: 14px;
+    height: 14px;
+    flex: none;
+    color: var(--color-text-maxcontrast);
+}
+
+.directory-row__chevron :deep(svg) {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+}
+
+.no-match {
+    padding: 24px 20px;
+    color: var(--color-text-maxcontrast);
+    font-size: 13px;
+    text-align: center;
+}
+
+.back-button {
+    margin-bottom: 8px;
+}
+
+.file-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.file-row:last-child {
+    border-bottom: none;
+}
+
+.file-row__checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--color-primary-element);
+}
+
+.file-row__name {
+    flex: 1;
+    font-size: 14px;
+}
+
+.file-row__history-icon {
+    display: flex;
+    width: 13px;
+    height: 13px;
+}
+
+.file-row__history-icon :deep(svg) {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+}
+
+.selection-bar {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: var(--color-main-background);
+    border-top: 1px solid var(--color-border);
+    padding: 14px 40px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.selection-bar__count {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.selection-bar__commit {
+    margin-left: auto;
 }
 </style>

@@ -263,7 +263,11 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$userSession->method('getUser')->willReturn($user);
 
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('nodeExists')->willReturn(true);
+
 		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('getCommittedDirectories')
@@ -281,6 +285,42 @@ final class ApiTest extends TestCase {
 		$this->assertEquals([
 			['path' => '/', 'files' => ['readme.txt']],
 			['path' => 'folder', 'files' => ['folder/a.txt']],
+		], $response->getData()['directories']);
+	}
+
+	public function testGetDirectoriesOmitsFilesDeletedFromNextcloud(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('nodeExists')->willReturnMap([
+			['readme.txt', true],
+			['folder/deleted.txt', false],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => '/', 'files' => ['readme.txt']],
+				['path' => 'folder', 'files' => ['folder/deleted.txt']],
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->getDirectories();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals([
+			['path' => '/', 'files' => ['readme.txt']],
 		], $response->getData()['directories']);
 	}
 

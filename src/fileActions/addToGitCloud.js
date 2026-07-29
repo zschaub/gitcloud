@@ -1,7 +1,7 @@
 import { registerFileAction } from "@nextcloud/files";
-import axios from "@nextcloud/axios";
-import { generateOcsUrl } from "@nextcloud/router";
+import { createApp, h } from "vue";
 import CloudIcon from "@mdi/svg/svg/cloud-upload.svg?raw"; // or any inline SVG string
+import CommitDialog from "../components/CommitDialog.vue";
 
 export const addToGitCloudAction = {
   id: "gitcloud-add-to-gitcloud",
@@ -23,33 +23,41 @@ export const addToGitCloudAction = {
   async exec(context) {
     const node = context.nodes[0];
 
-    const message = window.prompt(
-      `Commit message for "${node.basename ?? node.path}":`,
-      "",
-    );
-    if (message === null) {
-      // User cancelled the prompt.
-      return null;
-    }
-    if (message.trim() === "") {
-      window.alert("A commit message is required.");
-      return false;
-    }
+    return new Promise((resolve) => {
+      const mountEl = document.createElement("div");
+      document.body.appendChild(mountEl);
 
-    try {
-      const response = await axios.post(generateOcsUrl("apps/gitcloud/commit"), {
-        files: [node.path],
-        message,
+      let committed = false;
+
+      const app = createApp({
+        data() {
+          return { open: true };
+        },
+        methods: {
+          onUpdateOpen(value) {
+            this.open = value;
+            if (!value) {
+              app.unmount();
+              mountEl.remove();
+              resolve(committed);
+            }
+          },
+          onCommitted() {
+            committed = true;
+          },
+        },
+        render() {
+          return h(CommitDialog, {
+            open: this.open,
+            files: [node.path],
+            "onUpdate:open": this.onUpdateOpen,
+            onCommitted: this.onCommitted,
+          });
+        },
       });
-      window.alert(response.data.ocs.data.message);
-      return true;
-    } catch (error) {
-      const errorMessage =
-        error.response?.data?.ocs?.data?.message ??
-        "Failed to commit changes to GitCloud.";
-      window.alert(errorMessage);
-      return false;
-    }
+
+      app.mount(mountEl);
+    });
   },
 
   order: 100,
