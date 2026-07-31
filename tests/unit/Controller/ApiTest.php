@@ -282,11 +282,10 @@ final class ApiTest extends TestCase {
 				['path' => '/', 'files' => ['readme.txt']],
 				['path' => 'folder', 'files' => ['folder/a.txt']],
 			]);
-		$vcsService->method('getFileStatuses')
-			->willReturnMap([
-				['/data/testuser/files', ['readme.txt'], ['readme.txt' => 'Unchanged']],
-				['/data/testuser/files', ['folder/a.txt'], ['folder/a.txt' => 'Modified']],
-			]);
+		$vcsService->expects($this->once())
+			->method('getFileStatuses')
+			->with('/data/testuser/files', ['readme.txt', 'folder/a.txt'])
+			->willReturn(['readme.txt' => 'Unchanged', 'folder/a.txt' => 'Modified']);
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
 
@@ -330,7 +329,8 @@ final class ApiTest extends TestCase {
 				['path' => '/', 'files' => ['readme.txt']],
 				['path' => 'folder', 'files' => ['folder/deleted.txt']],
 			]);
-		$vcsService->method('getFileStatuses')
+		$vcsService->expects($this->once())
+			->method('getFileStatuses')
 			->with('/data/testuser/files', ['readme.txt'])
 			->willReturn(['readme.txt' => 'Unchanged']);
 

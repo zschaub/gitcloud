@@ -224,7 +224,9 @@ class ApiController extends OCSController {
 		}
 
 		$userId = $this->userSession->getUser()->getUID();
-		$directories = [];
+
+		$directoriesWithExistingFiles = [];
+		$allExistingFiles = [];
 		foreach ($this->vcsService->getCommittedDirectories($userId) as $directory) {
 			// Snapshot rows for a file are kept even after the file itself is
 			// deleted from Nextcloud, so this list must be filtered against
@@ -235,14 +237,25 @@ class ApiController extends OCSController {
 				continue;
 			}
 
-			$fileStatuses = $this->vcsService->getFileStatuses($repositoryPath, $existingFiles);
-			$files = array_map(
-				static fn (string $filePath): array => ['path' => $filePath, 'status' => $fileStatuses[$filePath] ?? 'Unchanged'],
-				$existingFiles,
-			);
-
-			$directories[] = ['path' => $directory['path'], 'files' => $files];
+			$directoriesWithExistingFiles[] = ['path' => $directory['path'], 'files' => $existingFiles];
+			array_push($allExistingFiles, ...$existingFiles);
 		}
+
+		// Computed once over every tracked file instead of once per directory, so a
+		// dashboard load only shells out to git a single time regardless of how many
+		// directories are tracked.
+		$fileStatuses = $this->vcsService->getFileStatuses($repositoryPath, $allExistingFiles);
+
+		$directories = array_map(
+			static fn (array $directory): array => [
+				'path' => $directory['path'],
+				'files' => array_map(
+					static fn (string $filePath): array => ['path' => $filePath, 'status' => $fileStatuses[$filePath] ?? 'Unchanged'],
+					$directory['files'],
+				),
+			],
+			$directoriesWithExistingFiles,
+		);
 
 		return new DataResponse(
 			[

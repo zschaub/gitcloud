@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-07-31
+
+### Fixed
+
+- `GET /apps/gitcloud/directories` previously called `VcsService::getFileStatuses` once per committed directory, spawning a separate `git status --porcelain -z` subprocess for each one (found by `/code-review`). `ApiController::getDirectories` now collects the existing files across every directory first and makes a single batched `getFileStatuses` call over their union, then splits the resulting status map back out per directory — one git subprocess per request regardless of how many directories are tracked. Verified via updated unit tests asserting `getFileStatuses` is called exactly once (`ApiTest::testGetDirectoriesSucceedsWithLoggedInUser`, `testGetDirectoriesOmitsFilesDeletedFromNextcloud`) and the full PHPUnit suite (32 tests) passing inside the running `stable34` container, plus a live `/directories` call confirming output is unchanged.
+
 ## [0.1.10] - 2026-07-29
 
 ### Added
