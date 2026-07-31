@@ -201,12 +201,13 @@ class ApiController extends OCSController {
 
 	/**
 	 * Returns the directories the current user has ever committed files under,
-	 * each with the list of files tracked in it, for the dashboard's
-	 * committed-directories list.
+	 * each with the list of files tracked in it and each file's Modified/Unchanged
+	 * status relative to HEAD, for the dashboard's committed-directories list.
 	 *
-	 * @return DataResponse<Http::STATUS_OK, array{status: string, directories: list<array{path: string, files: list<string>}>}, array{}>|DataResponse<Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, directories: list<array{path: string, files: list<array{path: string, status: string}>}>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
 	 * 200: Directories retrieved.
+	 * 400: Repository path could not be resolved.
 	 * 401: No user is logged in.
 	 */
 	#[NoAdminRequired]
@@ -217,6 +218,11 @@ class ApiController extends OCSController {
 			return $userFolder;
 		}
 
+		$repositoryPath = $this->getRepositoryPathOrErrorResponse($userFolder);
+		if ($repositoryPath instanceof DataResponse) {
+			return $repositoryPath;
+		}
+
 		$userId = $this->userSession->getUser()->getUID();
 		$directories = [];
 		foreach ($this->vcsService->getCommittedDirectories($userId) as $directory) {
@@ -225,9 +231,17 @@ class ApiController extends OCSController {
 			// what's still actually on disk or it'll show ghost entries.
 			$existingFiles = $this->filterExistingFiles($userFolder, $directory['files']);
 
-			if ($existingFiles !== []) {
-				$directories[] = ['path' => $directory['path'], 'files' => $existingFiles];
+			if ($existingFiles === []) {
+				continue;
 			}
+
+			$fileStatuses = $this->vcsService->getFileStatuses($repositoryPath, $existingFiles);
+			$files = array_map(
+				static fn (string $filePath): array => ['path' => $filePath, 'status' => $fileStatuses[$filePath] ?? 'Unchanged'],
+				$existingFiles,
+			);
+
+			$directories[] = ['path' => $directory['path'], 'files' => $files];
 		}
 
 		return new DataResponse(

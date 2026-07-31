@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-07-29
+
+### Added
+
+- `GET /apps/gitcloud/directories` now returns each file with a real `status` field (`Modified` or `Unchanged`, computed by `VcsService::getFileStatuses` via `git status --porcelain -z` scoped to that directory's files) instead of a bare path string. Directory Detail's file list shows this per-file status next to each filename, and the Committed Directories list on Overview shows an "N modified" pill on directories that have pending changes. This was the last open item for Phase 2 — completes the per-file Modified/Unchanged status follow-up flagged during the 0.1.8 UI redesign.
+
+### Fixed
+
+- Verifying this feature against a real running instance (`stable34.local`) surfaced two bugs neither the temp-repo PHPUnit tests nor static checks caught, both in `VcsService::runGit`/`getFileStatuses`, because the test data happened to have no spaces in any path: (1) `git status --porcelain` quotes any path containing a space or other special character (e.g. `"Test Folder/status test.txt"`), which never matched a plain relative path — fixed by using `--porcelain -z` for NUL-delimited, unquoted paths. (2) `runGit()`'s `trim()` of combined stdout+stderr was silently eating the meaningful leading space of git's own status-code column (e.g. `" M"` for "modified, not staged") whenever it happened to be the very first byte of output, shifting every parsed path by one character — fixed by trimming only trailing whitespace (`rtrim`) in `runGit`, since every other caller that cares about leading whitespace already trims its own hash/emptiness check explicitly. Added `VcsServiceTest::testGetFileStatusesHandlesFilePathsContainingSpaces` to cover both. Full PHPUnit suite (32 tests) verified passing inside the running `stable34` container; end-to-end flow (commit a file, confirm `Unchanged`, edit it on disk, confirm `Modified`, re-commit, confirm back to `Unchanged`) and directory-scoped Total Size/Status verified via the real OCS API against a file with a space in its path.
+
 ## [0.1.9] - 2026-07-29
 
 ### Added

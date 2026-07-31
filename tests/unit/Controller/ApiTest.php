@@ -263,7 +263,13 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$userSession->method('getUser')->willReturn($user);
 
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
 		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
 		$userFolder->method('nodeExists')->willReturn(true);
 
 		$rootFolder = $this->createMock(IRootFolder::class);
@@ -276,6 +282,11 @@ final class ApiTest extends TestCase {
 				['path' => '/', 'files' => ['readme.txt']],
 				['path' => 'folder', 'files' => ['folder/a.txt']],
 			]);
+		$vcsService->method('getFileStatuses')
+			->willReturnMap([
+				['/data/testuser/files', ['readme.txt'], ['readme.txt' => 'Unchanged']],
+				['/data/testuser/files', ['folder/a.txt'], ['folder/a.txt' => 'Modified']],
+			]);
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
 
@@ -283,8 +294,8 @@ final class ApiTest extends TestCase {
 
 		$this->assertEquals('success', $response->getData()['status']);
 		$this->assertEquals([
-			['path' => '/', 'files' => ['readme.txt']],
-			['path' => 'folder', 'files' => ['folder/a.txt']],
+			['path' => '/', 'files' => [['path' => 'readme.txt', 'status' => 'Unchanged']]],
+			['path' => 'folder', 'files' => [['path' => 'folder/a.txt', 'status' => 'Modified']]],
 		], $response->getData()['directories']);
 	}
 
@@ -297,7 +308,13 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$userSession->method('getUser')->willReturn($user);
 
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
 		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
 		$userFolder->method('nodeExists')->willReturnMap([
 			['readme.txt', true],
 			['folder/deleted.txt', false],
@@ -313,6 +330,9 @@ final class ApiTest extends TestCase {
 				['path' => '/', 'files' => ['readme.txt']],
 				['path' => 'folder', 'files' => ['folder/deleted.txt']],
 			]);
+		$vcsService->method('getFileStatuses')
+			->with('/data/testuser/files', ['readme.txt'])
+			->willReturn(['readme.txt' => 'Unchanged']);
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
 
@@ -320,7 +340,7 @@ final class ApiTest extends TestCase {
 
 		$this->assertEquals('success', $response->getData()['status']);
 		$this->assertEquals([
-			['path' => '/', 'files' => ['readme.txt']],
+			['path' => '/', 'files' => [['path' => 'readme.txt', 'status' => 'Unchanged']]],
 		], $response->getData()['directories']);
 	}
 

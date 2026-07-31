@@ -136,7 +136,11 @@ class VcsService {
 
 		return [
 			'success' => $exitCode === 0,
-			'output' => trim($stdout . "\n" . $stderr),
+			// Only trailing whitespace is trimmed here: `git status --porcelain`'s
+			// leading status-code column can itself be a space (e.g. " M" for
+			// "modified, not staged"), which a full trim() would silently eat from
+			// the very first line of output.
+			'output' => rtrim($stdout . "\n" . $stderr),
 		];
 	}
 
@@ -224,6 +228,41 @@ class VcsService {
 			'totalSizeBytes' => $totalSizeBytes,
 			'gitStatus' => $gitStatus,
 		];
+	}
+
+	/**
+	 * Computes each file's Modified/Unchanged status relative to HEAD, for display
+	 * per-file in the dashboard's Directory Detail file list.
+	 * @param string[] $relativeFilePaths
+	 * @return array<string, string> Map of file path to 'Modified' or 'Unchanged'.
+	 */
+	public function getFileStatuses(string $repositoryPath, array $relativeFilePaths): array {
+		$statuses = array_fill_keys($relativeFilePaths, 'Unchanged');
+
+		if (empty($relativeFilePaths) || !is_dir($repositoryPath . '/.git')) {
+			return $statuses;
+		}
+
+		// -z gives NUL-delimited, unquoted paths; without it git quotes any path
+		// containing a space or other special character (e.g. `"folder/a.txt"`),
+		// which would never match a plain relative path in $statuses below.
+		$statusResult = $this->runGit($repositoryPath, array_merge(['status', '--porcelain', '-z', '--'], $relativeFilePaths));
+		if (!$statusResult['success']) {
+			return $statuses;
+		}
+
+		foreach (explode("\0", $statusResult['output']) as $entry) {
+			if ($entry === '') {
+				continue;
+			}
+
+			$filePath = substr($entry, 3);
+			if (isset($statuses[$filePath])) {
+				$statuses[$filePath] = 'Modified';
+			}
+		}
+
+		return $statuses;
 	}
 
 	/**

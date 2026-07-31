@@ -319,6 +319,82 @@ final class VcsServiceTest extends TestCase {
 		$this->assertSame('Modified', $result['gitStatus']);
 	}
 
+	public function testGetFileStatusesMarksOnlyChangedFilesAsModified(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		mkdir($this->tmpRepoPath . '/folder');
+		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'original');
+		file_put_contents($this->tmpRepoPath . '/folder/b.txt', 'original');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'changed');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$statuses = $service->getFileStatuses($this->tmpRepoPath, ['folder/a.txt', 'folder/b.txt']);
+
+		$this->assertSame([
+			'folder/a.txt' => 'Modified',
+			'folder/b.txt' => 'Unchanged',
+		], $statuses);
+	}
+
+	public function testGetFileStatusesHandlesFilePathsContainingSpaces(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		mkdir($this->tmpRepoPath . '/Test Folder');
+		file_put_contents($this->tmpRepoPath . '/Test Folder/status test.txt', 'original');
+		file_put_contents($this->tmpRepoPath . '/Test Folder/unchanged.txt', 'original');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		file_put_contents($this->tmpRepoPath . '/Test Folder/status test.txt', 'changed');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		// Without -z, git quotes paths containing spaces in --porcelain output
+		// (e.g. `"Test Folder/status test.txt"`), which would never match a plain
+		// path here and silently leave every file reported as 'Unchanged'. The
+		// modified file is listed first so this also covers runGit() not eating
+		// the leading space of git's own status code column (e.g. " M").
+		$statuses = $service->getFileStatuses($this->tmpRepoPath, ['Test Folder/status test.txt', 'Test Folder/unchanged.txt']);
+
+		$this->assertSame([
+			'Test Folder/status test.txt' => 'Modified',
+			'Test Folder/unchanged.txt' => 'Unchanged',
+		], $statuses);
+	}
+
+	public function testGetFileStatusesReturnsUnchangedWhenNoGitRepository(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		file_put_contents($this->tmpRepoPath . '/a.txt', 'hello');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$statuses = $service->getFileStatuses($this->tmpRepoPath, ['a.txt']);
+
+		$this->assertSame(['a.txt' => 'Unchanged'], $statuses);
+	}
+
 	public function testGetCommittedDirectoriesGroupsFilesByDirectorySortedWithRootLast(): void {
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);

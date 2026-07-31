@@ -5,11 +5,15 @@
 
 **No GitHub connection.** GitCloud does not connect to GitHub (or any remote repository service). It operates entirely within your local Nextcloud instance, managing only files that you have checked out and work with locally. This is a self-contained app — no remotes, push/pull, or external account configuration.
 
+## Requirements
+
+- **The `git` binary must be installed and on the `PATH` of the user running PHP** (e.g. `www-data`/php-fpm) on the Nextcloud server. GitCloud has no bundled git and no PHP git library — every operation (`VcsService::runGit`) shells out directly to the `git` executable via `proc_open`. If `git` isn't installed, commit/rollback/status requests will fail with a generic error rather than a clear "git is not installed" message.
+
 ## Current State
 
 - **App Name:** GitCloud
 - **Base Directory:** `gitcloud`
-- **Status:** Phase 1 complete. Phase 2 in progress. This README will be updated as features are implemented.
+- **Status:** Phase 1 and Phase 2 complete. Phase 3 not yet started. This README will be updated as features are implemented.
 
 ## Development Roadmap & Milestones
 
@@ -22,7 +26,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 - ✅ Right-click context menu entry "Add to GitCloud" registered via `@nextcloud/files`.
 - ✅ Wire the backend stub (`VcsService`) to actually stage and commit selected files when the context action is triggered.
 
-### 🚧 Phase 2: Core Actions — Commits & Rollbacks (In Progress)
+### ✅ Phase 2: Core Actions — Commits & Rollbacks — Complete
 
 **Goal:** Reliable, everyday Git operations that users need most.
 1. ✅ **Wire up the dashboard UI** — Connect the dashboard's placeholder elements to real, live data (file counts, sizes, Git status) instead of dummy values.
@@ -33,7 +37,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 3. ✅ **Commit Changes** — Collect a user-provided commit message in the UI and record a snapshot row for each commit (the underlying `git add`/`git commit` plumbing and context menu wiring were already completed in Phase 1).
 4. ✅ **Rollback Snapshot** — Expose available snapshots per file via the API, revert selected files to a previously captured snapshot, and record a new snapshot row for the rollback. The dashboard's Rollback Snapshot button prompts for which file (when the selected directory has more than one real committed file) and which snapshot to restore, following the same `window.prompt`/`window.alert` convention as the commit flow.
    - ✅ **Follow-up:** Redesigned Commit/Rollback around real `@nextcloud/vue` UI instead of `window.prompt`/`alert`/`confirm` — commit is now per-file (checkbox selection + a shared `CommitDialog` used by both the dashboard and the Files-app right-click action) and rollback is a per-file `RollbackPanel` snapshot timeline with a confirm step, replacing the old prompt-chain flow. The dashboard also dropped its light-theme lock and now follows the instance's active theme. Per-file Modified/Unchanged status was considered but left out — no backend field exists for it yet; see kanban.
-   - ⬜ **Follow-up (open):** Add a real per-file Modified/Unchanged status to `GET /apps/gitcloud/directories` and surface it in Directory Detail's file list — see kanban.
+   - ✅ **Follow-up:** Added a real per-file Modified/Unchanged status to `GET /apps/gitcloud/directories` (`VcsService::getFileStatuses`, backed by `git status --porcelain` scoped to each directory's files) and surfaced it in Directory Detail's file list, plus an "N modified" pill on Overview's Committed Directories list. This was the last open item for Phase 2.
 
 ### 🔮 Phase 3: Advanced Features (TBD)
 
@@ -57,4 +61,4 @@ We will tackle this project in progressive phases to ensure stability and testab
 - [x] Redesign the dashboard into an Overview/Directory-Detail two-state layout with a committed-directories search (follow-up to Phase 2.1).
 - [x] Replace the mock-derived committed-directories list and Directory Detail file set with a real backend endpoint grouping committed files by directory (follow-up to Phase 2.1). Directory-scoped size/Git-status stats are still repository-wide; see kanban for the follow-up backend work.
 - [x] Scope Directory Detail's total size and Git status stats to the selected directory instead of the whole repository (follow-up to Phase 2.1).
-- [ ] Add a real per-file Modified/Unchanged status field to `GET /apps/gitcloud/directories` and show it in Directory Detail's file list (follow-up to Phase 2.4).
+- [x] Add a real per-file Modified/Unchanged status field to `GET /apps/gitcloud/directories` and show it in Directory Detail's file list (follow-up to Phase 2.4).

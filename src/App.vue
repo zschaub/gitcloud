@@ -57,9 +57,14 @@ function extractErrorMessage(error: unknown, fallback: string): string {
     return axiosError.response?.data?.ocs?.data?.message ?? fallback;
 }
 
+interface CommittedFile {
+    path: string;
+    status: string; // 'Modified' or 'Unchanged'
+}
+
 interface CommittedDirectory {
     path: string;
-    files: string[];
+    files: CommittedFile[];
 }
 
 const directories = ref<CommittedDirectory[]>([]);
@@ -84,7 +89,7 @@ const searchTerm = ref("");
 
 function statusVariant(status: string): "clean" | "modified" | "unknown" {
     if (status === "Modified") return "modified";
-    if (status === "Clean") return "clean";
+    if (status === "Clean" || status === "Unchanged") return "clean";
     return "unknown";
 }
 
@@ -110,6 +115,10 @@ const selectedDirectoryFiles = computed(() => {
 });
 
 const selectedDirectoryFileCount = computed(() => selectedDirectoryFiles.value.length);
+
+function modifiedFileCount(dir: CommittedDirectory): number {
+    return dir.files.filter((file) => file.status === "Modified").length;
+}
 
 const selectedFiles = ref<Set<string>>(new Set());
 
@@ -238,6 +247,9 @@ function onRolledBack() {
                             <span class="directory-row__icon" v-html="FolderOutlineIcon" />
                             <span class="directory-row__label">{{ directoryLabel(dir.path) }}</span>
                             <span class="directory-row__pill">{{ dir.files.length }} files</span>
+                            <span v-if="modifiedFileCount(dir) > 0" class="directory-row__pill directory-row__pill--modified">
+                                {{ modifiedFileCount(dir) }} modified
+                            </span>
                             <span class="directory-row__chevron" v-html="ChevronRightIcon" />
                         </li>
                     </ul>
@@ -275,16 +287,20 @@ function onRolledBack() {
                 <div class="files-panel">
                     <h2>Files</h2>
                     <ul class="file-list">
-                        <li v-for="file in selectedDirectoryFiles" :key="file" class="file-row">
+                        <li v-for="file in selectedDirectoryFiles" :key="file.path" class="file-row">
                             <input
                                 type="checkbox"
                                 class="file-row__checkbox"
-                                :checked="selectedFiles.has(file)"
-                                @change="toggleFileSelection(file)"
+                                :checked="selectedFiles.has(file.path)"
+                                @change="toggleFileSelection(file.path)"
                             />
                             <span class="file-row__icon" v-html="FileDocumentOutlineIcon" />
-                            <span class="file-row__name">{{ file }}</span>
-                            <NcButton variant="tertiary" @click="openRollbackForFile(file)">
+                            <span class="file-row__name">{{ file.path }}</span>
+                            <span class="file-row__status">
+                                <span class="status-dot" :class="`status-dot--${statusVariant(file.status)}`" />
+                                {{ file.status }}
+                            </span>
+                            <NcButton variant="tertiary" @click="openRollbackForFile(file.path)">
                                 <template #icon>
                                     <span class="file-row__history-icon" v-html="ClockOutlineIcon" />
                                 </template>
@@ -528,6 +544,11 @@ h2 {
     border-radius: 20px;
 }
 
+.directory-row__pill--modified {
+    color: var(--color-warning);
+    background-color: color-mix(in srgb, var(--color-warning) 15%, transparent);
+}
+
 .directory-row__chevron {
     display: flex;
     width: 14px;
@@ -575,6 +596,14 @@ h2 {
 .file-row__name {
     flex: 1;
     font-size: 14px;
+}
+
+.file-row__status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--color-text-maxcontrast);
 }
 
 .file-row__history-icon {
