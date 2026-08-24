@@ -113,7 +113,39 @@ class VcsService {
 	 * @param string[] $args
 	 * @return array{success: bool, output: string}
 	 */
-	private function runGit(string $cwd, array $args): array {
+	public function runGit(string $cwd, array $args): array {
+		// Git requires user identity (name/email) to be set before most operations.
+		// If not configured, try to configure it using system git config defaults.
+		if (!empty($args)) {
+			$configResult = $this->runGitConfigGet('user.email', $cwd);
+			$configNameResult = $this->runGitConfigGet('user.name', $cwd);
+
+			// If identity is not set locally, check for system-wide config
+			if ($configResult['success'] && trim($configResult['output']) === '') {
+				$systemEmailResult = $this->runGitConfigGet('user.email', '/');
+				if (trim($systemEmailResult['output']) !== '') {
+					$this->runGitConfigSet('user.email', trim($systemEmailResult['output']), $cwd);
+				}
+			}
+
+			if ($configNameResult['success'] && trim($configNameResult['output']) === '') {
+				$systemNameResult = $this->runGitConfigGet('user.name', '/');
+				if (trim($systemNameResult['output']) !== '') {
+					$this->runGitConfigSet('user.name', trim($systemNameResult['output']), $cwd);
+				}
+			}
+
+			// If no identity is found anywhere, use defaults for Nextcloud's php-fpm user
+			if (($configResult['success'] && trim($configResult['output']) === '')
+				|| ($configNameResult['success'] && trim($configNameResult['output']) === '')) {
+				$defaultEmail = 'www-data@nextcloud.local';
+				$defaultName = 'Nextcloud';
+
+				$this->runGitConfigSet('user.email', $defaultEmail, $cwd);
+				$this->runGitConfigSet('user.name', $defaultName, $cwd);
+			}
+		}
+
 		$process = proc_open(
 			array_merge(['git'], $args),
 			[
@@ -142,6 +174,60 @@ class VcsService {
 			// the very first line of output.
 			'output' => rtrim($stdout . "\n" . $stderr),
 		];
+	}
+
+	/**
+	 * Runs a git config get command directly via proc_open (used during identity setup).
+	 */
+	public function runGitConfigGet(string $key, string $cwd): array {
+		$process = proc_open(
+			array_merge(['git', 'config', $key, '--get']),
+			[
+				1 => ['pipe', 'w'],
+				2 => ['pipe', 'w'],
+			],
+			$pipes,
+			$cwd,
+		);
+
+		if (!is_resource($process)) {
+			return ['success' => false, 'output' => ''];
+		}
+
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		proc_close($process);
+
+		return ['success' => true, 'output' => rtrim($stdout . "\n" . $stderr, "")];
+	}
+
+	/**
+	 * Runs a git config set command directly via proc_open (used during identity setup).
+	 */
+	public function runGitConfigSet(string $key, string $value, string $cwd): array {
+		$process = proc_open(
+			array_merge(['git', 'config', $key, $value]),
+			[
+				1 => ['pipe', 'w'],
+				2 => ['pipe', 'w'],
+			],
+			$pipes,
+			$cwd,
+		);
+
+		if (!is_resource($process)) {
+			return ['success' => false, 'output' => ''];
+		}
+
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		proc_close($process);
+
+		return ['success' => true, 'output' => rtrim($stdout . "\n" . $stderr, "")];
 	}
 
 	/**
