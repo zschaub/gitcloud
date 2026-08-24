@@ -9,6 +9,13 @@
 
 - **The `git` binary must be installed and on the `PATH` of the user running PHP** (e.g. `www-data`/php-fpm) on the Nextcloud server. GitCloud has no bundled git and no PHP git library — every operation (`VcsService::runGit`) shells out directly to the `git` executable via `proc_open`. If `git` isn't installed, commit/rollback/status requests will fail with a generic error rather than a clear "git is not installed" message.
 
+## Usage
+
+1. **Commit a file or folder.** In the Nextcloud Files app, right-click any file or folder and choose **Add to GitCloud** from the context menu. Enter a commit message and confirm — the file (or, for a folder, every file inside it, including nested subfolders) is staged and committed to GitCloud's Git repository.
+2. **Open the GitCloud tab.** Select **GitCloud** from the Nextcloud left navigation to open the dashboard.
+   - **Overview** lists every directory you've committed files under, with aggregate stats (files tracked, directories, total size, Git status) and a search box to filter the list.
+   - Selecting a directory switches to **Directory Detail**, showing that directory's committed files with a Modified/Unchanged status per file. From here you can select files and commit further changes, or open a file's **History** to view its snapshot timeline and roll back to an earlier version.
+
 ## Current State
 
 - **App Name:** GitCloud
