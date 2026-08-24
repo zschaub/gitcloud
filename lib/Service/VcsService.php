@@ -114,9 +114,11 @@ class VcsService {
 	 * @return array{success: bool, output: string}
 	 */
 	public function runGit(string $cwd, array $args): array {
-		// Git requires user identity (name/email) to be set before most operations.
+		// Git requires user identity (name/email) to be set before creating a commit.
 		// If not configured, try to configure it using system git config defaults.
-		if (!empty($args)) {
+		// Only commands that actually author a commit need this, so read-only
+		// commands (status, diff, rev-parse, ...) skip it entirely.
+		if ($args !== [] && $args[0] === 'commit') {
 			$configResult = $this->runGitConfigGet('user.email', $cwd);
 			$configNameResult = $this->runGitConfigGet('user.name', $cwd);
 
@@ -202,7 +204,7 @@ class VcsService {
 		fclose($pipes[2]);
 		$exitCode = proc_close($process);
 
-		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr, "")];
+		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr)];
 	}
 
 	/**
@@ -227,9 +229,9 @@ class VcsService {
 		$stderr = stream_get_contents($pipes[2]);
 		fclose($pipes[1]);
 		fclose($pipes[2]);
-		proc_close($process);
+		$exitCode = proc_close($process);
 
-		return ['success' => true, 'output' => rtrim($stdout . "\n" . $stderr, "")];
+		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr)];
 	}
 
 	/**
@@ -339,7 +341,9 @@ class VcsService {
 			return $statuses;
 		}
 
-		foreach (explode("\0", $statusResult['output']) as $entry) {
+		$entries = explode("\0", $statusResult['output']);
+		for ($i = 0, $count = count($entries); $i < $count; $i++) {
+			$entry = $entries[$i];
 			if ($entry === '') {
 				continue;
 			}
@@ -347,6 +351,13 @@ class VcsService {
 			$filePath = substr($entry, 3);
 			if (isset($statuses[$filePath])) {
 				$statuses[$filePath] = 'Modified';
+			}
+
+			// A rename/copy ("R"/"C" in the index-status column) is followed by an
+			// extra NUL-terminated field holding the old path, which has no "XY "
+			// status prefix of its own — skip it so it isn't mis-parsed as a path.
+			if ($entry[0] === 'R' || $entry[0] === 'C') {
+				$i++;
 			}
 		}
 

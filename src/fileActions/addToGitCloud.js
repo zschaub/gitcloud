@@ -21,7 +21,7 @@ export const addToGitCloudAction = {
   inline: () => false,
 
   async exec(context) {
-    const node = context.nodes[0];
+    const paths = context.nodes.map((node) => node.path);
 
     return new Promise((resolve) => {
       const mountEl = document.createElement("div");
@@ -49,7 +49,7 @@ export const addToGitCloudAction = {
         render() {
           return h(CommitDialog, {
             open: this.open,
-            files: [node.path],
+            files: paths,
             "onUpdate:open": this.onUpdateOpen,
             onCommitted: this.onCommitted,
           });

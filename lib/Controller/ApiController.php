@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\GitCloud\Controller;
 
 use OCA\GitCloud\Db\Snapshot;
+use OCA\GitCloud\Exception\NotLocalStorageException;
 use OCA\GitCloud\Service\VcsService;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\ApiRoute;
@@ -84,17 +85,17 @@ class ApiController extends OCSController {
 				);
 			}
 
-			if (!$node->getStorage()->isLocal()) {
+			try {
+				array_push($relativePaths, ...$this->collectRelativeFilePaths($node, $userFolder));
+			} catch (NotLocalStorageException $e) {
 				return new DataResponse(
 					[
 						'status' => 'error',
-						'message' => sprintf('File is not on local storage: %s', $filePath),
+						'message' => sprintf('File is not on local storage: %s', $e->getMessage()),
 					],
 					Http::STATUS_BAD_REQUEST,
 				);
 			}
-
-			array_push($relativePaths, ...$this->collectRelativeFilePaths($node, $userFolder));
 		}
 
 		if (empty($relativePaths)) {
@@ -420,6 +421,10 @@ class ApiController extends OCSController {
 	 * @return string[]
 	 */
 	private function collectRelativeFilePaths(Node $node, Folder $userFolder): array {
+		if (!$node->getStorage()->isLocal()) {
+			throw new NotLocalStorageException(ltrim($userFolder->getRelativePath($node->getPath()), '/'));
+		}
+
 		if (!($node instanceof Folder)) {
 			return [ltrim($userFolder->getRelativePath($node->getPath()), '/')];
 		}

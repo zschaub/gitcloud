@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-08-24
+
+### Fixed
+
+- The Files-app "Add to GitCloud" right-click action (`src/fileActions/addToGitCloud.js`) only committed the first of multiple selected files (`context.nodes[0]`), silently dropping the rest with no indication to the user. Now passes every selected node's path (`context.nodes.map(...)`) through to `CommitDialog`, which already supported a multi-file `files` array.
+- `VcsService::getFileStatuses` mis-parsed renamed files out of `git status --porcelain -z` output: a staged rename emits an extra NUL-terminated field for the old path (e.g. `"R  renamed.txt\0a.txt\0"`) with no `XY ` status-code prefix, but the parser applied `substr($entry, 3)` to every field uniformly, mangling the old path into a key that could never match and silently leaving that entry's real status unreported. The parser now recognizes `R`/`C` (rename/copy) index-status entries and skips their trailing old-path field instead of mis-parsing it. Covered by a new `VcsServiceTest::testGetFileStatusesHandlesRenamedFileWithoutCorruptingOtherEntries`.
+- `ApiController::commitChanges` only checked `isLocal()` on the top-level selected node before recursively expanding folders (`collectRelativeFilePaths`); a folder containing a nested non-local mount (e.g. an external SMB/FTP storage mounted at a subpath) recursed into it anyway, producing paths that don't exist on the local repository filesystem and failing the entire `git add` batch — including for legitimate local files in the same folder. `collectRelativeFilePaths` now checks `isLocal()` at every level of the recursion and throws a new `OCA\GitCloud\Exception\NotLocalStorageException` (caught in `commitChanges` and turned into the existing "File is not on local storage" error response) as soon as a non-local node is encountered. Covered by a new `ApiTest::testCommitChangesFailsWhenFolderContainsNestedNonLocalMount`.
+- `VcsService::runGitConfigSet` hardcoded `'success' => true` regardless of the actual git exit code, discarding `proc_close()`'s return value — the same defect already fixed for `runGitConfigGet` in 0.1.15, reintroduced in the sibling method. Now returns `'success' => $exitCode === 0` like `runGitConfigGet` and `runGit`.
+- `runGitConfigGet`/`runGitConfigSet` trimmed their combined stdout+stderr output with `rtrim($output, "")` — an empty character mask makes `rtrim` a no-op, so trailing whitespace was never actually stripped (verified: `php -r 'var_dump(rtrim("hello\n\n", ""));'` returns the string unchanged). Both now use the same bare `rtrim($output)` as `runGit` itself.
+
+### Changed
+
+- `VcsService::runGit` previously ran its git-identity check-and-configure sequence (up to 6 extra `git config` subprocesses) before every single git invocation, including pure reads like `status`, `diff --cached --quiet`, and `rev-parse HEAD`. Since only `git commit` actually requires an author identity, the check now only runs when the command being executed is `commit`, meaningfully reducing subprocess overhead on read-heavy requests like a dashboard load (repository status + batched file statuses + per-file snapshot lookups).
+
+Full PHPUnit suite (37 tests, up from 35) verified passing inside the running `stable34` container; `composer lint` and a clean `vite build` also verified.
+
 ## [0.1.16] - 2026-08-24
 
 ### Fixed

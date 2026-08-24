@@ -130,6 +130,59 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('success', $response->getData()['status']);
 	}
 
+	public function testCommitChangesFailsWhenFolderContainsNestedNonLocalMount(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$localStorage = $this->createMock(IStorage::class);
+		$localStorage->method('isLocal')->willReturn(true);
+		$localStorage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		// folder/ is on local storage, but has an external-storage mount nested
+		// inside it (e.g. SMB mounted at folder/mount) that is not local.
+		$remoteStorage = $this->createMock(IStorage::class);
+		$remoteStorage->method('isLocal')->willReturn(false);
+
+		$fileA = $this->createMock(Node::class);
+		$fileA->method('getStorage')->willReturn($localStorage);
+		$fileA->method('getPath')->willReturn('/testuser/files/folder/a.txt');
+
+		$mountedFolder = $this->createMock(Folder::class);
+		$mountedFolder->method('getStorage')->willReturn($remoteStorage);
+		$mountedFolder->method('getPath')->willReturn('/testuser/files/folder/mount');
+
+		$folder = $this->createMock(Folder::class);
+		$folder->method('getStorage')->willReturn($localStorage);
+		$folder->method('getDirectoryListing')->willReturn([$fileA, $mountedFolder]);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($localStorage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('folder')->willReturn($folder);
+		$userFolder->method('getRelativePath')->willReturnMap([
+			['/testuser/files/folder/a.txt', '/folder/a.txt'],
+			['/testuser/files/folder/mount', '/folder/mount'],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->commitChanges(['folder'], 'Initial commit');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertStringContainsString('folder/mount', $response->getData()['message']);
+	}
+
 	public function testCommitChangesFailsWithoutFilesOrMessage(): void {
 		$request = $this->createMock(IRequest::class);
 		$userSession = $this->createMock(IUserSession::class);

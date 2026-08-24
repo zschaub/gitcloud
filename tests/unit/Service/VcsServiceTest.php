@@ -380,6 +380,36 @@ final class VcsServiceTest extends TestCase {
 		], $statuses);
 	}
 
+	public function testGetFileStatusesHandlesRenamedFileWithoutCorruptingOtherEntries(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/a.txt', 'original');
+		file_put_contents($this->tmpRepoPath . '/b.txt', 'original');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		// `git mv` stages the rename immediately, so `git status --porcelain -z`
+		// emits "R  renamed.txt\0a.txt\0" — the extra NUL field for the old path
+		// has no "XY " status prefix and must not be parsed as its own entry.
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' mv a.txt renamed.txt');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$statuses = $service->getFileStatuses($this->tmpRepoPath, ['renamed.txt', 'b.txt']);
+
+		$this->assertSame([
+			'renamed.txt' => 'Modified',
+			'b.txt' => 'Unchanged',
+		], $statuses);
+	}
+
 	public function testGetFileStatusesReturnsUnchangedWhenNoGitRepository(): void {
 		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
 		mkdir($this->tmpRepoPath);
