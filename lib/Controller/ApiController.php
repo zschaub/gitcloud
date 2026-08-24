@@ -13,6 +13,7 @@ use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
+use OCP\Files\Node;
 use OCP\Files\NotFoundException;
 use OCP\IRequest;
 use OCP\IUserSession;
@@ -93,7 +94,7 @@ class ApiController extends OCSController {
 				);
 			}
 
-			$relativePaths[] = ltrim($userFolder->getRelativePath($node->getPath()), '/');
+			array_push($relativePaths, ...$this->collectRelativeFilePaths($node, $userFolder));
 		}
 
 		if (empty($relativePaths)) {
@@ -398,6 +399,27 @@ class ApiController extends OCSController {
 			],
 			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
 		);
+	}
+
+	/**
+	 * Resolves $node to the repository-relative path(s) of the file(s) it represents.
+	 * A folder's own path can't be committed as-is (git has no notion of committing a bare
+	 * directory, and recording a snapshot for the folder path itself hides every file inside
+	 * it from the directories/snapshots API), so folders are expanded recursively into their
+	 * contained files instead.
+	 * @return string[]
+	 */
+	private function collectRelativeFilePaths(Node $node, Folder $userFolder): array {
+		if (!($node instanceof Folder)) {
+			return [ltrim($userFolder->getRelativePath($node->getPath()), '/')];
+		}
+
+		$relativePaths = [];
+		foreach ($node->getDirectoryListing() as $child) {
+			array_push($relativePaths, ...$this->collectRelativeFilePaths($child, $userFolder));
+		}
+
+		return $relativePaths;
 	}
 
 	/**

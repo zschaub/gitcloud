@@ -69,6 +69,66 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('success', $response->getData()['status']);
 	}
 
+	public function testCommitChangesExpandsFolderIntoContainedFiles(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		// folder/
+		//   a.txt
+		//   sub/
+		//     b.txt
+		$fileA = $this->createMock(Node::class);
+		$fileA->method('getStorage')->willReturn($storage);
+		$fileA->method('getPath')->willReturn('/testuser/files/folder/a.txt');
+
+		$fileB = $this->createMock(Node::class);
+		$fileB->method('getStorage')->willReturn($storage);
+		$fileB->method('getPath')->willReturn('/testuser/files/folder/sub/b.txt');
+
+		$subFolder = $this->createMock(Folder::class);
+		$subFolder->method('getStorage')->willReturn($storage);
+		$subFolder->method('getDirectoryListing')->willReturn([$fileB]);
+
+		$folder = $this->createMock(Folder::class);
+		$folder->method('getStorage')->willReturn($storage);
+		$folder->method('getDirectoryListing')->willReturn([$fileA, $subFolder]);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('folder')->willReturn($folder);
+		$userFolder->method('getRelativePath')->willReturnMap([
+			['/testuser/files/folder/a.txt', '/folder/a.txt'],
+			['/testuser/files/folder/sub/b.txt', '/folder/sub/b.txt'],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('commitChanges')
+			->with('/data/testuser/files', ['folder/a.txt', 'folder/sub/b.txt'], 'Initial commit', 'testuser')
+			->willReturn([
+				'success' => true,
+				'message' => 'Successfully staged and committed changes.',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->commitChanges(['folder'], 'Initial commit');
+
+		$this->assertEquals('success', $response->getData()['status']);
+	}
+
 	public function testCommitChangesFailsWithoutFilesOrMessage(): void {
 		$request = $this->createMock(IRequest::class);
 		$userSession = $this->createMock(IUserSession::class);

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-08-24
+
+### Fixed
+
+- Committing a folder (e.g. via the Files-app "Add to GitCloud" right-click action on a directory, which passes the clicked node's own path straight through to `POST /apps/gitcloud/commit`) previously staged the folder's contents via `git add <folder>` — which git recurses through fine — but recorded only a single `gitcloud_snapshots` row for the folder's own path rather than one per file inside it. Since `VcsService::getCommittedDirectories` buckets snapshot rows by the directory portion of their file path, that folder path was bucketed as a bogus "file" under the repository root, and every real file nested inside the folder (including anything in subfolders) never got its own snapshot row — so subfolder contents never appeared in the dashboard's Committed Directories/Directory Detail lists. Committing a subfolder directly afterward then reported "No changes to commit for the selected file(s)." because git had already committed everything during the parent folder's commit. `ApiController::commitChanges` now recursively expands any folder passed in `files` into its contained files (`ApiController::collectRelativeFilePaths`, walking `Folder::getDirectoryListing()`) before staging/recording, so every file — at any nesting depth — gets tracked individually. Covered by a new `ApiTest::testCommitChangesExpandsFolderIntoContainedFiles` unit test; full PHPUnit suite (33 tests) verified passing inside the running `stable34` container.
+
 ## [0.1.11] - 2026-07-31
 
 ### Fixed
