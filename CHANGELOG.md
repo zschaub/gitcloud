@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-08-24
+
+### Fixed
+
+- `POST /apps/gitcloud/commit` rejected a commit message that was literally the string `"0"` with "Missing file paths or commit message.", because `ApiController::commitChanges`'s validation used PHP's `empty($message)`, which treats `"0"` as empty — even though `VcsService::commitChanges`'s own check (`trim($message) === ''`) would have accepted it. Now uses `trim($message) === ''` for consistency. Covered by a new `ApiTest::testCommitChangesAcceptsMessageThatIsLiteralZero`; full PHPUnit suite (35 tests) verified passing inside the running `stable34` container.
+
 ## [0.1.15] - 2026-08-24
 
 ### Fixed

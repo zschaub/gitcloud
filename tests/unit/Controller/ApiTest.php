@@ -143,6 +143,47 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('error', $response->getData()['status']);
 	}
 
+	public function testCommitChangesAcceptsMessageThatIsLiteralZero(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$file1 = $this->createMock(Node::class);
+		$file1->method('getStorage')->willReturn($storage);
+		$file1->method('getPath')->willReturn('/testuser/files/file1.txt');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('file1.txt')->willReturn($file1);
+		$userFolder->method('getRelativePath')->with('/testuser/files/file1.txt')->willReturn('/file1.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('commitChanges')
+			->with('/data/testuser/files', ['file1.txt'], '0', 'testuser')
+			->willReturn([
+				'success' => true,
+				'message' => 'Successfully staged and committed changes.',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->commitChanges(['file1.txt'], '0');
+
+		$this->assertEquals('success', $response->getData()['status']);
+	}
+
 	public function testCommitChangesFailsWhenNoUserIsLoggedIn(): void {
 		$request = $this->createMock(IRequest::class);
 

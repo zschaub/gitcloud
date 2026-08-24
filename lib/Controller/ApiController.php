@@ -46,7 +46,7 @@ class ApiController extends OCSController {
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'POST', url: '/commit')]
 	public function commitChanges(array $files = [], string $message = ''): DataResponse {
-		if (empty($files) || empty($message)) {
+		if (empty($files) || trim($message) === '') {
 			return new DataResponse(
 				[
 					'status' => 'error',

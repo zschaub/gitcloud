@@ -9,7 +9,7 @@
     ><![CDATA[GitCloud enhances Nextcloud's file management by integrating fundamental Git version control capabilities directly into the UI.]]></summary>
 	<description
     ><![CDATA[The GitCloud app brings professional-grade version control workflows—specifically Git's core functionality into the native Nextcloud file manager experience. Users can treat their shared cloud storage not just as a file repository, but as a tracked, auditable source of truth. Key features include right-click context menu actions for staging and committing local changes, retrieving historical snapshots (rollbacks), and maintaining version integrity with minimal effort. This minimizes the need to switch contexts to a dedicated Git client while providing critical safety nets for document collaboration.]]></description>
-	<version>0.1.15</version>
+	<version>0.1.16</version>
 	<licence>AGPL-3.0-or-later</licence>
 	<author mail="zschaub@proton.me" homepage="">Brian Zschau</author>
 	<namespace>GitCloud</namespace>
