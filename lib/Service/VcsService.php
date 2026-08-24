@@ -121,23 +121,25 @@ class VcsService {
 			$configNameResult = $this->runGitConfigGet('user.name', $cwd);
 
 			// If identity is not set locally, check for system-wide config
-			if ($configResult['success'] && trim($configResult['output']) === '') {
+			if (!$configResult['success'] || trim($configResult['output']) === '') {
 				$systemEmailResult = $this->runGitConfigGet('user.email', '/');
-				if (trim($systemEmailResult['output']) !== '') {
+				if ($systemEmailResult['success'] && trim($systemEmailResult['output']) !== '') {
 					$this->runGitConfigSet('user.email', trim($systemEmailResult['output']), $cwd);
+					$configResult = ['success' => true, 'output' => trim($systemEmailResult['output'])];
 				}
 			}
 
-			if ($configNameResult['success'] && trim($configNameResult['output']) === '') {
+			if (!$configNameResult['success'] || trim($configNameResult['output']) === '') {
 				$systemNameResult = $this->runGitConfigGet('user.name', '/');
-				if (trim($systemNameResult['output']) !== '') {
+				if ($systemNameResult['success'] && trim($systemNameResult['output']) !== '') {
 					$this->runGitConfigSet('user.name', trim($systemNameResult['output']), $cwd);
+					$configNameResult = ['success' => true, 'output' => trim($systemNameResult['output'])];
 				}
 			}
 
 			// If no identity is found anywhere, use defaults for Nextcloud's php-fpm user
-			if (($configResult['success'] && trim($configResult['output']) === '')
-				|| ($configNameResult['success'] && trim($configNameResult['output']) === '')) {
+			if ((!$configResult['success'] || trim($configResult['output']) === '')
+				|| (!$configNameResult['success'] || trim($configNameResult['output']) === '')) {
 				$defaultEmail = 'www-data@nextcloud.local';
 				$defaultName = 'Nextcloud';
 
@@ -181,7 +183,7 @@ class VcsService {
 	 */
 	public function runGitConfigGet(string $key, string $cwd): array {
 		$process = proc_open(
-			array_merge(['git', 'config', $key, '--get']),
+			array_merge(['git', 'config', '--get', $key]),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
@@ -198,9 +200,9 @@ class VcsService {
 		$stderr = stream_get_contents($pipes[2]);
 		fclose($pipes[1]);
 		fclose($pipes[2]);
-		proc_close($process);
+		$exitCode = proc_close($process);
 
-		return ['success' => true, 'output' => rtrim($stdout . "\n" . $stderr, "")];
+		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr, "")];
 	}
 
 	/**

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-08-24
+
+### Fixed
+
+- `VcsService::runGit`'s automatic git identity setup (added in 0.1.14's predecessor commit "Fix Git username and email setting bug") silently discarded any real git identity — whether inherited from system/global git config or previously set on the repo — and force-overwrote `user.email`/`user.name` to the hardcoded fallback (`Nextcloud <www-data@nextcloud.local>`) on every single `runGit()` call, not just when identity was actually unset. Root cause was two bugs in `VcsService::runGitConfigGet`: (1) it ran `git config <key> --get`, which git parses as *setting* `<key>` to the literal value `"--get"` rather than reading it — confirmed by inspecting `.git/config` after a call, which showed `email = --get`; (2) it hardcoded `'success' => true` regardless of the actual git exit code, discarding `proc_close()`'s return value, so the "is this identity actually configured" check could never fail. Together, every commit/rollback GitCloud ever made was authored as `Nextcloud <www-data@nextcloud.local>`, never a real configured identity. Fixed by correcting the flag order (`git config --get <key>`) and using the real exit code for `success`; also fixed `runGit`'s surrounding condition checks, which treated "not found" (`success === false`) as "still needs a default" only when `success === true`, and re-check-after-set logic that would otherwise let a real system-wide identity be immediately clobbered by the hardcoded default a few lines later. Verified against a real git repo that a pre-configured identity now survives `runGit()` unchanged, and that a repo with no identity configured anywhere still falls back to the hardcoded default (so commits don't start failing with "Please tell me who you are"). Full PHPUnit suite (34 tests) verified passing inside the running `stable34` container.
+
 ## [0.1.14] - 2026-08-24
 
 ### Fixed
