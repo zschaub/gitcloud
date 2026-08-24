@@ -8,6 +8,7 @@ use OCA\GitCloud\AppInfo\Application;
 use OCA\GitCloud\Controller\ApiController;
 use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Service\VcsService;
+use OCP\Files\Cache\IUpdater;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
@@ -255,9 +256,14 @@ final class ApiTest extends TestCase {
 		$storage->method('isLocal')->willReturn(true);
 		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
 
+		$updater = $this->createMock(IUpdater::class);
+		$updater->expects($this->once())->method('update')->with('files/file1.txt');
+		$storage->method('getUpdater')->willReturn($updater);
+
 		$file = $this->createMock(Node::class);
 		$file->method('getStorage')->willReturn($storage);
 		$file->method('getPath')->willReturn('/testuser/files/file1.txt');
+		$file->method('getInternalPath')->willReturn('files/file1.txt');
 
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getStorage')->willReturn($storage);
@@ -281,6 +287,51 @@ final class ApiTest extends TestCase {
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
 		$this->assertEquals('success', $response->getData()['status']);
+	}
+
+	public function testRollbackSnapshotDoesNotRefreshCacheWhenRollbackFails(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$updater = $this->createMock(IUpdater::class);
+		$updater->expects($this->never())->method('update');
+		$storage->method('getUpdater')->willReturn($updater);
+
+		$file = $this->createMock(Node::class);
+		$file->method('getStorage')->willReturn($storage);
+		$file->method('getPath')->willReturn('/testuser/files/file1.txt');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('file1.txt')->willReturn($file);
+		$userFolder->method('getRelativePath')->with('/testuser/files/file1.txt')->willReturn('/file1.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('rollbackToSnapshot')
+			->with('/data/testuser/files', 'file1.txt', 1, 'testuser')
+			->willReturn([
+				'success' => false,
+				'message' => 'File is already at the selected snapshot.',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+
+		$response = $controller->rollbackSnapshot('file1.txt', 1);
+
+		$this->assertEquals('error', $response->getData()['status']);
 	}
 
 	public function testRollbackSnapshotFailsWithoutFileOrSnapshotId(): void {

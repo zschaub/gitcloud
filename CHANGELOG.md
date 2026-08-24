@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-08-24
+
+### Fixed
+
+- Rolling back a file (`POST /apps/gitcloud/rollback`) restores its content via `git checkout <hash> -- <file>` directly on the local filesystem, bypassing Nextcloud's Node/View write path entirely. This left `oc_filecache`'s mtime/etag/size stale for the file, so desktop/mobile sync clients — which detect remote changes by polling WebDAV for etag changes — never saw the rollback and never re-downloaded the restored content, even though the file on disk had changed. `ApiController::rollbackSnapshot` now calls `$node->getStorage()->getUpdater()->update($node->getInternalPath())` after a successful rollback to resync the cache entry and propagate the new etag/mtime up to parent folders, mirroring the same call Nextcloud's own WebDAV PUT handler (`apps/dav/lib/Connector/Sabre/File.php`) makes after writing file content outside the Node API. Verified this is the correct, documented pattern (`OCP\Files\Storage\IStorage::getUpdater()`/`IUpdater::update()`) by inspecting Nextcloud core inside the running `stable34` container, and confirmed core's DAV PUT handler and several other apps (`files_trashbin`, `files_sharing`) use the identical call after direct-storage writes. Covered by a new `ApiTest::testRollbackSnapshotDoesNotRefreshCacheWhenRollbackFails` and an updated `testRollbackSnapshotSucceedsWithValidFileAndSnapshotId` asserting the updater is invoked (only on success) with the file's internal path; full PHPUnit suite (34 tests) and Psalm verified inside the running `stable34` container — Psalm's pre-existing 95 findings (an unrelated stub/environment issue) are unchanged in count before and after this change. 
+
 ## [0.1.13] - 2026-08-24
 
 ### Changed

@@ -392,6 +392,16 @@ class ApiController extends OCSController {
 			$this->userSession->getUser()->getUID(),
 		);
 
+		if ($result['success']) {
+			// Rollback restores content via `git checkout` directly on disk, bypassing the
+			// Node API, so Nextcloud's filecache (mtime/etag/size) is left stale until the
+			// next full filesystem scan. Sync clients detect changes by polling for etag
+			// changes via WebDAV, so without this they won't see the rolled-back content.
+			// This mirrors how DAV's own PUT handler (apps/dav/lib/Connector/Sabre/File.php)
+			// resyncs the cache after writing file content outside the Node/View write path.
+			$node->getStorage()->getUpdater()->update($node->getInternalPath());
+		}
+
 		return new DataResponse(
 			[
 				'status' => $result['success'] ? 'success' : 'error',
