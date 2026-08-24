@@ -102,11 +102,78 @@ function directoryLabel(path: string): string {
     return path === "/" ? "Root" : path;
 }
 
-const filteredDirectories = computed(() => {
-    if (!searchTerm.value) return directories.value;
-    return directories.value.filter((dir) =>
-        directoryLabel(dir.path).toLowerCase().includes(searchTerm.value.toLowerCase()),
-    );
+interface DirectoryRow {
+    path: string;
+    label: string;
+    depth: number;
+    files: CommittedFile[];
+    isReal: boolean; // false = a path segment shown only to group its children, not an actual committed directory
+}
+
+interface TreeBuilderNode {
+    path: string;
+    label: string;
+    files: CommittedFile[];
+    isReal: boolean;
+    children: Map<string, TreeBuilderNode>;
+}
+
+// Builds a nested tree out of the flat directory list the backend returns, so a
+// committed subfolder (e.g. "folder/sub") renders indented under its parent
+// ("folder") instead of as its own unrelated top-level entry. Ancestor path
+// segments with no directly committed files of their own (e.g. "folder" when
+// only "folder/sub" was ever committed to) still get a row purely to group
+// their children under, but aren't selectable since there's nothing to show.
+function buildDirectoryTree(dirs: CommittedDirectory[]): DirectoryRow[] {
+    const roots = new Map<string, TreeBuilderNode>();
+
+    for (const dir of dirs) {
+        if (dir.path === "/") continue;
+
+        let children = roots;
+        let currentPath = "";
+        let node: TreeBuilderNode | undefined;
+        for (const segment of dir.path.split("/")) {
+            currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+            node = children.get(segment);
+            if (!node) {
+                node = { path: currentPath, label: segment, files: [], isReal: false, children: new Map() };
+                children.set(segment, node);
+            }
+            children = node.children;
+        }
+        if (node) {
+            node.isReal = true;
+            node.files = dir.files;
+        }
+    }
+
+    function flatten(nodes: Map<string, TreeBuilderNode>, depth: number): DirectoryRow[] {
+        const rows: DirectoryRow[] = [];
+        for (const node of [...nodes.values()].sort((a, b) => a.label.localeCompare(b.label))) {
+            rows.push({ path: node.path, label: node.label, depth, files: node.files, isReal: node.isReal });
+            rows.push(...flatten(node.children, depth + 1));
+        }
+        return rows;
+    }
+
+    return flatten(roots, 0);
+}
+
+const displayedDirectoryRows = computed<DirectoryRow[]>(() => {
+    if (searchTerm.value) {
+        return directories.value
+            .filter((dir) => directoryLabel(dir.path).toLowerCase().includes(searchTerm.value.toLowerCase()))
+            .map((dir) => ({ path: dir.path, label: directoryLabel(dir.path), depth: 0, files: dir.files, isReal: true }));
+    }
+
+    const rows: DirectoryRow[] = [];
+    const root = directories.value.find((dir) => dir.path === "/");
+    if (root) {
+        rows.push({ path: "/", label: "Root", depth: 0, files: root.files, isReal: true });
+    }
+    rows.push(...buildDirectoryTree(directories.value));
+    return rows;
 });
 
 const selectedDirectoryFiles = computed(() => {
@@ -237,20 +304,24 @@ function onRolledBack() {
                             @update:model-value="searchTerm = String($event)"
                         />
                     </div>
-                    <ul v-if="filteredDirectories.length" class="directory-list">
+                    <ul v-if="displayedDirectoryRows.length" class="directory-list">
                         <li
-                            v-for="dir in filteredDirectories"
-                            :key="dir.path"
+                            v-for="row in displayedDirectoryRows"
+                            :key="row.path"
                             class="directory-row"
-                            @click="selectDirectory(dir.path)"
+                            :class="{ 'directory-row--synthetic': !row.isReal }"
+                            :style="{ paddingLeft: `${20 + row.depth * 22}px` }"
+                            @click="row.isReal && selectDirectory(row.path)"
                         >
                             <span class="directory-row__icon" v-html="FolderOutlineIcon" />
-                            <span class="directory-row__label">{{ directoryLabel(dir.path) }}</span>
-                            <span class="directory-row__pill">{{ dir.files.length }} files</span>
-                            <span v-if="modifiedFileCount(dir) > 0" class="directory-row__pill directory-row__pill--modified">
-                                {{ modifiedFileCount(dir) }} modified
-                            </span>
-                            <span class="directory-row__chevron" v-html="ChevronRightIcon" />
+                            <span class="directory-row__label">{{ row.label }}</span>
+                            <template v-if="row.isReal">
+                                <span class="directory-row__pill">{{ row.files.length }} files</span>
+                                <span v-if="modifiedFileCount(row) > 0" class="directory-row__pill directory-row__pill--modified">
+                                    {{ modifiedFileCount(row) }} modified
+                                </span>
+                                <span class="directory-row__chevron" v-html="ChevronRightIcon" />
+                            </template>
                         </li>
                     </ul>
                     <p v-else class="no-match">No directories match "{{ searchTerm }}".</p>
@@ -512,6 +583,19 @@ h2 {
 
 .directory-row:hover {
     background-color: var(--color-background-hover);
+}
+
+.directory-row--synthetic {
+    cursor: default;
+    color: var(--color-text-maxcontrast);
+}
+
+.directory-row--synthetic:hover {
+    background-color: transparent;
+}
+
+.directory-row--synthetic .directory-row__label {
+    font-weight: 400;
 }
 
 .directory-row__icon,

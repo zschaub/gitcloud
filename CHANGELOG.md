@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-08-24
+
+### Changed
+
+- Overview's Committed Directories list now renders subfolders nested under their parent folder instead of as separate, unrelated top-level entries. `src/App.vue` builds a client-side tree (`buildDirectoryTree`) out of the flat `directories` list the backend already returns, indenting each path segment under its parent; a folder path with no directly-committed files of its own (e.g. "folder" when only "folder/sub" was ever committed to) still gets a row purely to group its children under, shown muted and non-clickable since there's nothing to open. Searching the list still shows a flat, full-path result set as before — nesting only applies to the unfiltered view. No backend changes; `GET /apps/gitcloud/directories`'s response shape is unchanged. Verified with a clean `vite build`; `vue-tsc`/`eslint` could not be run in this environment (dependency/config resolution issues unrelated to this change).
+
 ## [0.1.12] - 2026-08-24
 
 ### Fixed
