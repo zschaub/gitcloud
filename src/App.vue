@@ -59,7 +59,7 @@ function extractErrorMessage(error: unknown, fallback: string): string {
 
 interface CommittedFile {
     path: string;
-    status: string; // 'Modified' or 'Unchanged'
+    status: string; // 'Modified', 'Unchanged', or 'Uncommitted'
 }
 
 interface CommittedDirectory {
@@ -87,8 +87,9 @@ onMounted(() => {
 
 const searchTerm = ref("");
 
-function statusVariant(status: string): "clean" | "modified" | "unknown" {
+function statusVariant(status: string): "clean" | "modified" | "uncommitted" | "unknown" {
     if (status === "Modified") return "modified";
+    if (status === "Uncommitted") return "uncommitted";
     if (status === "Clean" || status === "Unchanged") return "clean";
     return "unknown";
 }
@@ -185,6 +186,10 @@ const selectedDirectoryFileCount = computed(() => selectedDirectoryFiles.value.l
 
 function modifiedFileCount(dir: CommittedDirectory): number {
     return dir.files.filter((file) => file.status === "Modified").length;
+}
+
+function uncommittedFileCount(dir: CommittedDirectory): number {
+    return dir.files.filter((file) => file.status === "Uncommitted").length;
 }
 
 const selectedFiles = ref<Set<string>>(new Set());
@@ -319,6 +324,9 @@ function onRolledBack() {
                                 <span class="directory-row__pill">{{ row.files.length }} files</span>
                                 <span v-if="modifiedFileCount(row) > 0" class="directory-row__pill directory-row__pill--modified">
                                     {{ modifiedFileCount(row) }} modified
+                                </span>
+                                <span v-if="uncommittedFileCount(row) > 0" class="directory-row__pill directory-row__pill--uncommitted">
+                                    {{ uncommittedFileCount(row) }} uncommitted
                                 </span>
                                 <span class="directory-row__chevron" v-html="ChevronRightIcon" />
                             </template>
@@ -495,6 +503,10 @@ h2 {
     background-color: var(--color-warning);
 }
 
+.status-dot--uncommitted {
+    background-color: var(--color-primary-element);
+}
+
 .status-dot--unknown {
     background-color: var(--color-text-maxcontrast);
 }
@@ -631,6 +643,11 @@ h2 {
 .directory-row__pill--modified {
     color: var(--color-warning);
     background-color: color-mix(in srgb, var(--color-warning) 15%, transparent);
+}
+
+.directory-row__pill--uncommitted {
+    color: var(--color-primary-element);
+    background-color: color-mix(in srgb, var(--color-primary-element) 15%, transparent);
 }
 
 .directory-row__chevron {

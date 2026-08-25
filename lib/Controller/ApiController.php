@@ -292,8 +292,12 @@ class ApiController extends OCSController {
 
 	/**
 	 * Returns the directories the current user has ever committed files under,
-	 * each with the list of files tracked in it and each file's Modified/Unchanged
-	 * status relative to HEAD, for the dashboard's committed-directories list.
+	 * each with the list of files tracked in it and each file's status relative
+	 * to HEAD ('Modified'/'Unchanged'), for the dashboard's committed-directories
+	 * list. A subfolder (not the repository root) that already has at least one
+	 * committed file also surfaces any other files sitting in it that have never
+	 * been committed, tagged 'Uncommitted', so newly added files aren't invisible
+	 * until a user manually commits them.
 	 *
 	 * @return DataResponse<Http::STATUS_OK, array{status: string, directories: list<array{path: string, files: list<array{path: string, status: string}>}>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
@@ -324,11 +328,23 @@ class ApiController extends OCSController {
 			// what's still actually on disk or it'll show ghost entries.
 			$existingFiles = $this->filterExistingFiles($userFolder, $directory['files']);
 
-			if ($existingFiles === []) {
+			// The repository root ("/") is excluded: it groups files purely because
+			// they sit at the top level of the user's whole Nextcloud storage, not
+			// because that folder was deliberately tracked, so listing "new files in
+			// it" would surface every unrelated file at the root.
+			$uncommittedFiles = $directory['path'] === '/'
+				? []
+				: $this->findUncommittedFiles($userFolder, $directory['path'], $directory['files']);
+
+			if ($existingFiles === [] && $uncommittedFiles === []) {
 				continue;
 			}
 
-			$directoriesWithExistingFiles[] = ['path' => $directory['path'], 'files' => $existingFiles];
+			$directoriesWithExistingFiles[] = [
+				'path' => $directory['path'],
+				'files' => $existingFiles,
+				'uncommittedFiles' => $uncommittedFiles,
+			];
 			array_push($allExistingFiles, ...$existingFiles);
 		}
 
@@ -340,9 +356,15 @@ class ApiController extends OCSController {
 		$directories = array_map(
 			static fn (array $directory): array => [
 				'path' => $directory['path'],
-				'files' => array_map(
-					static fn (string $filePath): array => ['path' => $filePath, 'status' => $fileStatuses[$filePath] ?? 'Unchanged'],
-					$directory['files'],
+				'files' => array_merge(
+					array_map(
+						static fn (string $filePath): array => ['path' => $filePath, 'status' => $fileStatuses[$filePath] ?? 'Unchanged'],
+						$directory['files'],
+					),
+					array_map(
+						static fn (string $filePath): array => ['path' => $filePath, 'status' => 'Uncommitted'],
+						$directory['uncommittedFiles'],
+					),
 				),
 			],
 			$directoriesWithExistingFiles,
@@ -577,6 +599,45 @@ class ApiController extends OCSController {
 			$filePaths,
 			static fn (string $filePath): bool => $userFolder->nodeExists($filePath),
 		));
+	}
+
+	/**
+	 * Finds files sitting directly inside $directory that have never been committed
+	 * (i.e. not in $committedFiles), so a file newly added to an already-tracked
+	 * directory still surfaces in the dashboard instead of being invisible until a
+	 * user manually commits it. Subfolders of $directory are not recursed into —
+	 * each is its own directory entry, grouped the same way committed files are.
+	 *
+	 * @param string[] $committedFiles
+	 * @return string[]
+	 */
+	private function findUncommittedFiles(Folder $userFolder, string $directory, array $committedFiles): array {
+		try {
+			$folderNode = $userFolder->get($directory);
+		} catch (NotFoundException) {
+			return [];
+		}
+
+		if (!($folderNode instanceof Folder)) {
+			return [];
+		}
+
+		$committedFileSet = array_flip($committedFiles);
+		$uncommittedFiles = [];
+		foreach ($folderNode->getDirectoryListing() as $child) {
+			if ($child instanceof Folder) {
+				continue;
+			}
+
+			$relativePath = ltrim($userFolder->getRelativePath($child->getPath()), '/');
+			if (!isset($committedFileSet[$relativePath])) {
+				$uncommittedFiles[] = $relativePath;
+			}
+		}
+
+		sort($uncommittedFiles);
+
+		return $uncommittedFiles;
 	}
 
 	/**

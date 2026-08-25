@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-08-25
+
+### Added
+
+- Adding a new file to a folder that already has at least one file committed to GitCloud now surfaces that new file in the dashboard automatically, tagged `Uncommitted`, instead of staying invisible until someone manually commits it. `GET /apps/gitcloud/directories` groups files strictly from `gitcloud_snapshots` history, so a file that had never been committed had no row to be grouped by and simply never appeared — even though its containing directory was already shown as "tracked". `ApiController::getDirectories` now also lists, for each non-root tracked directory, any file physically present in that Nextcloud folder that isn't already in its committed file set (`ApiController::findUncommittedFiles`, a direct `Folder::getDirectoryListing()` scan — not recursive into subfolders, since each subfolder is its own directory grouping), reporting each as `{path, status: 'Uncommitted'}` alongside the existing `Modified`/`Unchanged` entries. These files are selectable/committable in Directory Detail exactly like any other file, since they're real paths under the user's storage.
+- The repository root directory (`/`) is intentionally excluded from this — it groups files purely because they sit at the top level of the user's whole Nextcloud storage rather than because that folder was deliberately tracked, so applying the same logic there would surface every unrelated file at the root as "Uncommitted".
+- Overview's Committed Directories list gained an "N uncommitted" pill (next to the existing "N modified" pill) on directories with newly-surfaced files, and the per-file status pill in Directory Detail now renders a distinct color for `Uncommitted` vs. `Modified`/`Unchanged` (`src/App.vue`'s `statusVariant`/`uncommittedFileCount`).
+
+Covered by two new `ApiTest` cases (`testGetDirectoriesSurfacesUncommittedFilesInTrackedSubdirectory`, `testGetDirectoriesDoesNotSurfaceUncommittedFilesAtRepositoryRoot`); the full PHPUnit suite could not be run in this environment since it requires the running `stable34` container, but `composer lint`/`composer cs:check` and a clean `vite build` were verified. The user should confirm the new tests pass and the pill/tag render as expected in their running instance.
+
 ## [0.1.20] - 2026-08-25
 
 ### Fixed

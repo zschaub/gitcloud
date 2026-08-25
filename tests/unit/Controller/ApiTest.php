@@ -562,6 +562,128 @@ final class ApiTest extends TestCase {
 		], $response->getData()['directories']);
 	}
 
+	public function testGetDirectoriesSurfacesUncommittedFilesInTrackedSubdirectory(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		// folder/
+		//   a.txt      (already committed)
+		//   new.txt    (never committed - should surface as 'Uncommitted')
+		//   sub/       (a subfolder - should be skipped, not recursed into)
+		$fileA = $this->createMock(Node::class);
+		$fileA->method('getStorage')->willReturn($storage);
+		$fileA->method('getPath')->willReturn('/testuser/files/folder/a.txt');
+
+		$newFile = $this->createMock(Node::class);
+		$newFile->method('getStorage')->willReturn($storage);
+		$newFile->method('getPath')->willReturn('/testuser/files/folder/new.txt');
+
+		$subFolder = $this->createMock(Folder::class);
+		$subFolder->method('getStorage')->willReturn($storage);
+
+		$folder = $this->createMock(Folder::class);
+		$folder->method('getStorage')->willReturn($storage);
+		$folder->method('getDirectoryListing')->willReturn([$fileA, $newFile, $subFolder]);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['folder/a.txt', true],
+		]);
+		$userFolder->method('get')->with('folder')->willReturn($folder);
+		$userFolder->method('getRelativePath')->willReturnMap([
+			['/testuser/files/folder/a.txt', '/folder/a.txt'],
+			['/testuser/files/folder/new.txt', '/folder/new.txt'],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => 'folder', 'files' => ['folder/a.txt']],
+			]);
+		$vcsService->expects($this->once())
+			->method('getFileStatuses')
+			->with('/data/testuser/files', ['folder/a.txt'])
+			->willReturn(['folder/a.txt' => 'Unchanged']);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getDirectories();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals([
+			[
+				'path' => 'folder',
+				'files' => [
+					['path' => 'folder/a.txt', 'status' => 'Unchanged'],
+					['path' => 'folder/new.txt', 'status' => 'Uncommitted'],
+				],
+			],
+		], $response->getData()['directories']);
+	}
+
+	public function testGetDirectoriesDoesNotSurfaceUncommittedFilesAtRepositoryRoot(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['readme.txt', true],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => '/', 'files' => ['readme.txt']],
+			]);
+		$vcsService->expects($this->once())
+			->method('getFileStatuses')
+			->with('/data/testuser/files', ['readme.txt'])
+			->willReturn(['readme.txt' => 'Unchanged']);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getDirectories();
+
+		// $userFolder->get() is never stubbed for '/', so if the root directory were
+		// (incorrectly) passed to findUncommittedFiles, the mock's default null return
+		// would fail the `instanceof Folder` check anyway - this asserts the intended
+		// behavior (root is skipped entirely) rather than relying on that side effect.
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals([
+			['path' => '/', 'files' => [['path' => 'readme.txt', 'status' => 'Unchanged']]],
+		], $response->getData()['directories']);
+	}
+
 	public function testGetDirectoriesFailsWhenNoUserIsLoggedIn(): void {
 		$request = $this->createMock(IRequest::class);
 
