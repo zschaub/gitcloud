@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import NcDialog from "@nextcloud/vue/components/NcDialog";
 import NcTextArea from "@nextcloud/vue/components/NcTextArea";
+import NcNoteCard from "@nextcloud/vue/components/NcNoteCard";
 import { ref, computed, watch } from "vue";
 import axios from "@nextcloud/axios";
 import { generateOcsUrl } from "@nextcloud/router";
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 const message = ref("");
 const status = ref<null | "loading" | "success" | "error">(null);
 const resultMessage = ref("");
+const warnings = ref<string[]>([]);
 
 watch(
     () => props.open,
@@ -26,6 +28,7 @@ watch(
             message.value = "";
             status.value = null;
             resultMessage.value = "";
+            warnings.value = [];
         }
     },
 );
@@ -53,6 +56,7 @@ async function submitCommit() {
         });
         status.value = "success";
         resultMessage.value = response.data.ocs.data.message;
+        warnings.value = response.data.ocs.data.warnings ?? [];
         emit("committed");
     } catch (error) {
         status.value = "error";
@@ -120,6 +124,11 @@ const buttons = computed(() => {
             <p v-if="status === 'error'" class="commit-dialog__result commit-dialog__result--error">
                 {{ resultMessage }}
             </p>
+            <NcNoteCard v-if="warnings.length > 0" type="warning" heading="Oversized files committed anyway">
+                <ul class="commit-dialog__warnings">
+                    <li v-for="file in warnings" :key="file">{{ fileName(file) }}</li>
+                </ul>
+            </NcNoteCard>
         </div>
     </NcDialog>
 </template>
@@ -161,5 +170,10 @@ const buttons = computed(() => {
 
 .commit-dialog__result--error {
     color: var(--color-error);
+}
+
+.commit-dialog__warnings {
+    margin: 0;
+    padding-left: 18px;
 }
 </style>

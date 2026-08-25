@@ -520,5 +520,59 @@ class VcsService {
 		return $slashPos === false ? '/' : substr($normalized, 0, $slashPos);
 	}
 
+	/**
+	 * Irreversibly wipes all Git history for the repository rooted at $repositoryPath
+	 * by deleting .git and reinitializing an empty repository. Working-tree files are
+	 * left untouched, since $repositoryPath is the user's own Nextcloud home directory
+	 * and .git holds only history, not the live file content. Also removes every
+	 * gitcloud_snapshots row for $userId, since their commit hashes become invalid
+	 * once history is wiped.
+	 *
+	 * There is no locking around this (the codebase has none anywhere today), so a
+	 * commit/rollback racing with a history wipe is a known, unhandled edge case.
+	 *
+	 * @return array{success: bool, message: string}
+	 */
+	public function deleteHistory(string $repositoryPath, string $userId): array {
+		if (!is_dir($repositoryPath)) {
+			$this->logger->warning(sprintf('Repository path does not exist: %s', $repositoryPath));
+			return ['success' => false, 'message' => 'Repository path does not exist.'];
+		}
+
+		if (is_dir($repositoryPath . '/.git')) {
+			$this->removeDirectoryRecursive($repositoryPath . '/.git');
+		}
+
+		$initResult = $this->ensureRepository($repositoryPath);
+		if (!$initResult['success']) {
+			return ['success' => false, 'message' => $initResult['message'] ?? 'Failed to reinitialize repository.'];
+		}
+
+		$this->snapshotMapper->deleteAllForUser($userId);
+
+		$this->logger->info(sprintf('Deleted all Git history for user %s', $userId));
+		return ['success' => true, 'message' => 'All commit history has been permanently deleted.'];
+	}
+
+	/**
+	 * Recursively deletes a directory and its contents.
+	 */
+	private function removeDirectoryRecursive(string $path): void {
+		$iterator = new \RecursiveIteratorIterator(
+			new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+			\RecursiveIteratorIterator::CHILD_FIRST,
+		);
+
+		foreach ($iterator as $entry) {
+			if ($entry->isDir()) {
+				rmdir($entry->getPathname());
+			} else {
+				unlink($entry->getPathname());
+			}
+		}
+
+		rmdir($path);
+	}
+
 	// Future methods: getCommitHistory(path), listSnapshots() etc.
 }

@@ -13,12 +13,25 @@ use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\Files\Storage\IStorage;
+use OCP\IAppConfig;
 use OCP\IRequest;
 use OCP\IUser;
 use OCP\IUserSession;
 use PHPUnit\Framework\TestCase;
 
 final class ApiTest extends TestCase {
+	/**
+	 * Default max-file-size (100MB, block mode) app config mock, used by every test
+	 * that doesn't specifically exercise the file-size enforcement behavior.
+	 */
+	private function defaultAppConfig(): IAppConfig {
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->method('getValueInt')->willReturn(100);
+		$appConfig->method('getValueString')->willReturn('block');
+
+		return $appConfig;
+	}
+
 	public function testCommitChangesSucceedsWithFilesAndMessage(): void {
 		$request = $this->createMock(IRequest::class);
 
@@ -63,7 +76,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->commitChanges(['file1.txt', 'file2.txt'], 'Initial commit');
 
@@ -123,7 +136,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->commitChanges(['folder'], 'Initial commit');
 
@@ -175,7 +188,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->never())->method('commitChanges');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->commitChanges(['folder'], 'Initial commit');
 
@@ -189,7 +202,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->commitChanges();
 
@@ -230,7 +243,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->commitChanges(['file1.txt'], '0');
 
@@ -246,7 +259,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->commitChanges(['file1.txt'], 'Initial commit');
 
@@ -289,7 +302,7 @@ final class ApiTest extends TestCase {
 			->with('testuser', 'file1.txt')
 			->willReturn([$snapshot]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getSnapshots('file1.txt');
 
@@ -312,7 +325,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getSnapshots();
 
@@ -329,7 +342,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getSnapshots('file1.txt');
 
@@ -376,7 +389,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully rolled back file1.txt to the selected snapshot.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
@@ -421,7 +434,7 @@ final class ApiTest extends TestCase {
 				'message' => 'File is already at the selected snapshot.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
@@ -434,7 +447,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->rollbackSnapshot();
 
@@ -451,7 +464,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
@@ -492,7 +505,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', ['readme.txt', 'folder/a.txt'])
 			->willReturn(['readme.txt' => 'Unchanged', 'folder/a.txt' => 'Modified']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getDirectories();
 
@@ -539,7 +552,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', ['readme.txt'])
 			->willReturn(['readme.txt' => 'Unchanged']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getDirectories();
 
@@ -558,7 +571,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getDirectories();
 
@@ -599,7 +612,7 @@ final class ApiTest extends TestCase {
 			]);
 		$vcsService->expects($this->never())->method('getDirectoryStatus');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getStatus();
 
@@ -651,7 +664,7 @@ final class ApiTest extends TestCase {
 			]);
 		$vcsService->expects($this->never())->method('getRepositoryStatus');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getStatus('folder');
 
@@ -671,9 +684,252 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getStatus();
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(401, $response->getStatus());
+	}
+
+	public function testCommitChangesRejectsFileOverLimitInBlockMode(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$file1 = $this->createMock(Node::class);
+		$file1->method('getStorage')->willReturn($storage);
+		$file1->method('getPath')->willReturn('/testuser/files/big.txt');
+		$file1->method('getSize')->willReturn(200 * 1024 * 1024);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('big.txt')->willReturn($file1);
+		$userFolder->method('getRelativePath')->with('/testuser/files/big.txt')->willReturn('/big.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->method('getValueInt')->willReturn(100);
+		$appConfig->method('getValueString')->willReturn('block');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->commitChanges(['big.txt'], 'Initial commit');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertStringContainsString('big.txt', $response->getData()['message']);
+		$this->assertStringContainsString('100 MB', $response->getData()['message']);
+	}
+
+	public function testCommitChangesAllowsFileOverLimitInWarnModeAndReturnsWarning(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$file1 = $this->createMock(Node::class);
+		$file1->method('getStorage')->willReturn($storage);
+		$file1->method('getPath')->willReturn('/testuser/files/big.txt');
+		$file1->method('getSize')->willReturn(200 * 1024 * 1024);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('big.txt')->willReturn($file1);
+		$userFolder->method('getRelativePath')->with('/testuser/files/big.txt')->willReturn('/big.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('commitChanges')
+			->with('/data/testuser/files', ['big.txt'], 'Initial commit', 'testuser')
+			->willReturn([
+				'success' => true,
+				'message' => 'Successfully staged and committed changes.',
+			]);
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->method('getValueInt')->willReturn(100);
+		$appConfig->method('getValueString')->willReturn('warn');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->commitChanges(['big.txt'], 'Initial commit');
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(['big.txt'], $response->getData()['warnings']);
+	}
+
+	public function testCommitChangesSucceedsWhenAllFilesUnderLimit(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$file1 = $this->createMock(Node::class);
+		$file1->method('getStorage')->willReturn($storage);
+		$file1->method('getPath')->willReturn('/testuser/files/file1.txt');
+		$file1->method('getSize')->willReturn(1024);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('file1.txt')->willReturn($file1);
+		$userFolder->method('getRelativePath')->with('/testuser/files/file1.txt')->willReturn('/file1.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('commitChanges')
+			->with('/data/testuser/files', ['file1.txt'], 'Initial commit', 'testuser')
+			->willReturn([
+				'success' => true,
+				'message' => 'Successfully staged and committed changes.',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->commitChanges(['file1.txt'], 'Initial commit');
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertArrayNotHasKey('warnings', $response->getData());
+	}
+
+	public function testSaveAdminSettingsPersistsValues(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->expects($this->once())
+			->method('setValueInt')
+			->with(Application::APP_ID, 'max_file_size_mb', 50);
+		$appConfig->expects($this->once())
+			->method('setValueString')
+			->with(Application::APP_ID, 'enforcement_mode', 'warn');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->saveAdminSettings(50, 'warn');
+
+		$this->assertEquals('success', $response->getData()['status']);
+	}
+
+	public function testSaveAdminSettingsRejectsInvalidEnforcementMode(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->expects($this->never())->method('setValueInt');
+		$appConfig->expects($this->never())->method('setValueString');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->saveAdminSettings(50, 'foo');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testSaveAdminSettingsRejectsNonPositiveMaxFileSize(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->expects($this->never())->method('setValueInt');
+		$appConfig->expects($this->never())->method('setValueString');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->saveAdminSettings(0, 'block');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testDeleteHistoryCallsVcsServiceWithResolvedRepositoryPathAndUser(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->once())
+			->method('deleteHistory')
+			->with('/data/testuser/files', 'testuser')
+			->willReturn([
+				'success' => true,
+				'message' => 'All commit history has been permanently deleted.',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->deleteHistory();
+
+		$this->assertEquals('success', $response->getData()['status']);
+	}
+
+	public function testDeleteHistoryFailsWhenNoUserIsLoggedIn(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn(null);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->deleteHistory();
 
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(401, $response->getStatus());

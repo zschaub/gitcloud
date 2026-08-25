@@ -477,4 +477,63 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertSame([], $service->getCommittedDirectories('testuser'));
 	}
+
+	public function testDeleteHistoryRemovesGitDirectoryAndReinitializes(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->once())->method('deleteAllForUser')->with('testuser');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->deleteHistory($this->tmpRepoPath, 'testuser');
+
+		$this->assertTrue($result['success']);
+		$this->assertDirectoryExists($this->tmpRepoPath . '/.git');
+
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' rev-parse HEAD 2>&1', $output, $exitCode);
+		$this->assertNotSame(0, $exitCode);
+	}
+
+	public function testDeleteHistoryLeavesWorkingTreeFilesIntact(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+		$service->deleteHistory($this->tmpRepoPath, 'testuser');
+
+		$this->assertSame('hello', file_get_contents($this->tmpRepoPath . '/file1.txt'));
+	}
+
+	public function testDeleteHistoryFailsWhenRepositoryPathMissing(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('deleteAllForUser');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->deleteHistory('/nonexistent/path/' . uniqid(), 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
 }

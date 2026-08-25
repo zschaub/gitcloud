@@ -1,0 +1,247 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "gitcloud-administration",
+        "version": "0.0.1",
+        "description": "GitCloud enhances Nextcloud's file management by integrating fundamental Git version control capabilities directly into the UI.",
+        "license": {
+            "name": "AGPL-3.0-or-later"
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "basic_auth": {
+                "type": "http",
+                "scheme": "basic"
+            },
+            "bearer_auth": {
+                "type": "http",
+                "scheme": "bearer"
+            }
+        },
+        "schemas": {
+            "OCSMeta": {
+                "type": "object",
+                "required": [
+                    "status",
+                    "statuscode"
+                ],
+                "properties": {
+                    "status": {
+                        "type": "string"
+                    },
+                    "statuscode": {
+                        "type": "integer"
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "totalitems": {
+                        "type": "string"
+                    },
+                    "itemsperpage": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    },
+    "paths": {
+        "/ocs/v2.php/apps/gitcloud/admin/settings": {
+            "post": {
+                "operationId": "api-save-admin-settings",
+                "summary": "Saves the admin-configured max file size and enforcement mode.",
+                "description": "This endpoint requires admin access",
+                "tags": [
+                    "api"
+                ],
+                "security": [
+                    {
+                        "bearer_auth": []
+                    },
+                    {
+                        "basic_auth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "maxFileSizeMb": {
+                                        "type": "integer",
+                                        "format": "int64",
+                                        "default": 0,
+                                        "description": "Maximum size, in megabytes, a single file may be to be committed."
+                                    },
+                                    "enforcementMode": {
+                                        "type": "string",
+                                        "default": "",
+                                        "description": "Either \"warn\" or \"block\"."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "OCS-APIRequest",
+                        "in": "header",
+                        "description": "Required to be true for the API request to pass",
+                        "required": true,
+                        "schema": {
+                            "type": "boolean",
+                            "default": true
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Settings saved.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {
+                                                    "type": "object",
+                                                    "required": [
+                                                        "status",
+                                                        "message"
+                                                    ],
+                                                    "properties": {
+                                                        "status": {
+                                                            "type": "string"
+                                                        },
+                                                        "message": {
+                                                            "type": "string"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid settings values.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {
+                                                    "type": "object",
+                                                    "required": [
+                                                        "status",
+                                                        "message"
+                                                    ],
+                                                    "properties": {
+                                                        "status": {
+                                                            "type": "string"
+                                                        },
+                                                        "message": {
+                                                            "type": "string"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Current user is not logged in",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Logged in account must be an admin",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "ocs"
+                                    ],
+                                    "properties": {
+                                        "ocs": {
+                                            "type": "object",
+                                            "required": [
+                                                "meta",
+                                                "data"
+                                            ],
+                                            "properties": {
+                                                "meta": {
+                                                    "$ref": "#/components/schemas/OCSMeta"
+                                                },
+                                                "data": {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "tags": []
+}

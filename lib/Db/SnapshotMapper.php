@@ -62,4 +62,18 @@ class SnapshotMapper extends QBMapper {
 
 		return $this->findEntities($select);
 	}
+
+	/**
+	 * Permanently deletes every snapshot row for the given user, used when the
+	 * user wipes their Git history (their commit hashes become invalid afterward).
+	 */
+	public function deleteAllForUser(string $userId): void {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb
+			->delete($this->getTableName())
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)));
+
+		$qb->executeStatement();
+	}
 }

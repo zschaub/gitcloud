@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace OCA\GitCloud\Controller;
 
+use OCA\GitCloud\AppInfo\Application;
 use OCA\GitCloud\Db\Snapshot;
+use OCA\GitCloud\Exception\FileTooLargeException;
 use OCA\GitCloud\Exception\NotLocalStorageException;
 use OCA\GitCloud\Service\VcsService;
+use OCA\GitCloud\Settings\Admin;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\ApiRoute;
+use OCP\AppFramework\Http\Attribute\AuthorizedAdminSetting;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
@@ -16,6 +20,7 @@ use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\IAppConfig;
 use OCP\IRequest;
 use OCP\IUserSession;
 
@@ -29,6 +34,7 @@ class ApiController extends OCSController {
 		private IUserSession $userSession,
 		private IRootFolder $rootFolder,
 		private VcsService $vcsService,
+		private IAppConfig $appConfig,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -36,9 +42,9 @@ class ApiController extends OCSController {
 	/**
 	 * Commits staged file changes using a provided message.
 	 *
-	 * @param string[] $files File paths, relative to the user's storage, to stage and commit.
+	 * @param list<string> $files File paths, relative to the user's storage, to stage and commit.
 	 * @param string $message The commit message.
-	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string, warnings?: list<string>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
 	 * 200: Commit successful, data returned.
 	 * 400: Missing or invalid data, or the commit failed.
@@ -67,7 +73,12 @@ class ApiController extends OCSController {
 			return $repositoryPath;
 		}
 
+		$maxFileSizeMb = $this->appConfig->getValueInt(Application::APP_ID, 'max_file_size_mb', 100);
+		$enforcementMode = $this->appConfig->getValueString(Application::APP_ID, 'enforcement_mode', 'block');
+		$maxFileSizeBytes = $maxFileSizeMb * 1024 * 1024;
+
 		$relativePaths = [];
+		$warnings = [];
 		foreach ($files as $filePath) {
 			if (!is_string($filePath) || $filePath === '') {
 				continue;
@@ -86,12 +97,23 @@ class ApiController extends OCSController {
 			}
 
 			try {
-				array_push($relativePaths, ...$this->collectRelativeFilePaths($node, $userFolder));
+				array_push(
+					$relativePaths,
+					...$this->collectRelativeFilePaths($node, $userFolder, $maxFileSizeBytes, $enforcementMode, $warnings),
+				);
 			} catch (NotLocalStorageException $e) {
 				return new DataResponse(
 					[
 						'status' => 'error',
 						'message' => sprintf('File is not on local storage: %s', $e->getMessage()),
+					],
+					Http::STATUS_BAD_REQUEST,
+				);
+			} catch (FileTooLargeException $e) {
+				return new DataResponse(
+					[
+						'status' => 'error',
+						'message' => sprintf('File exceeds the %d MB size limit: %s', $maxFileSizeMb, $e->getMessage()),
 					],
 					Http::STATUS_BAD_REQUEST,
 				);
@@ -114,6 +136,81 @@ class ApiController extends OCSController {
 			$message,
 			$this->userSession->getUser()->getUID(),
 		);
+
+		$responseData = [
+			'status' => $result['success'] ? 'success' : 'error',
+			'message' => $result['message'],
+		];
+		if ($result['success'] && !empty($warnings)) {
+			$responseData['warnings'] = $warnings;
+		}
+
+		return new DataResponse(
+			$responseData,
+			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
+		);
+	}
+
+	/**
+	 * Saves the admin-configured max file size and enforcement mode.
+	 *
+	 * @param int $maxFileSizeMb Maximum size, in megabytes, a single file may be to be committed.
+	 * @param string $enforcementMode Either "warn" or "block".
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Settings saved.
+	 * 400: Invalid settings values.
+	 */
+	#[AuthorizedAdminSetting(settings: Admin::class)]
+	#[ApiRoute(verb: 'POST', url: '/admin/settings')]
+	public function saveAdminSettings(int $maxFileSizeMb = 0, string $enforcementMode = ''): DataResponse {
+		if ($maxFileSizeMb <= 0 || !in_array($enforcementMode, ['warn', 'block'], true)) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => 'Invalid max file size or enforcement mode.',
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$this->appConfig->setValueInt(Application::APP_ID, 'max_file_size_mb', $maxFileSizeMb);
+		$this->appConfig->setValueString(Application::APP_ID, 'enforcement_mode', $enforcementMode);
+
+		return new DataResponse(
+			[
+				'status' => 'success',
+				'message' => 'Settings saved.',
+			],
+			Http::STATUS_OK,
+		);
+	}
+
+	/**
+	 * Permanently deletes the current user's Git history (the whole repository is
+	 * reinitialized) and every recorded snapshot row for them. Working tree files
+	 * are left untouched. This cannot be undone.
+	 *
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: History deleted.
+	 * 400: The repository path could not be resolved, or the deletion failed.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'POST', url: '/history/delete')]
+	public function deleteHistory(): DataResponse {
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		$repositoryPath = $this->getRepositoryPathOrErrorResponse($userFolder);
+		if ($repositoryPath instanceof DataResponse) {
+			return $repositoryPath;
+		}
+
+		$result = $this->vcsService->deleteHistory($repositoryPath, $this->userSession->getUser()->getUID());
 
 		return new DataResponse(
 			[
@@ -418,20 +515,47 @@ class ApiController extends OCSController {
 	 * directory, and recording a snapshot for the folder path itself hides every file inside
 	 * it from the directories/snapshots API), so folders are expanded recursively into their
 	 * contained files instead.
+	 *
+	 * Each leaf file's size is checked against $maxFileSizeBytes: in "block" mode an
+	 * oversized file throws FileTooLargeException (aborting the whole commit, matching
+	 * the existing all-or-nothing NotLocalStorageException behavior); in "warn" mode its
+	 * path is appended to $warnings instead and the file is still committed.
+	 *
+	 * @param string[] $warnings
 	 * @return string[]
+	 * @throws FileTooLargeException
 	 */
-	private function collectRelativeFilePaths(Node $node, Folder $userFolder): array {
+	private function collectRelativeFilePaths(
+		Node $node,
+		Folder $userFolder,
+		int $maxFileSizeBytes,
+		string $enforcementMode,
+		array &$warnings,
+	): array {
 		if (!$node->getStorage()->isLocal()) {
 			throw new NotLocalStorageException(ltrim($userFolder->getRelativePath($node->getPath()), '/'));
 		}
 
 		if (!($node instanceof Folder)) {
-			return [ltrim($userFolder->getRelativePath($node->getPath()), '/')];
+			$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
+
+			if ($node->getSize() > $maxFileSizeBytes) {
+				if ($enforcementMode === 'warn') {
+					$warnings[] = $relativePath;
+				} else {
+					throw new FileTooLargeException($relativePath);
+				}
+			}
+
+			return [$relativePath];
 		}
 
 		$relativePaths = [];
 		foreach ($node->getDirectoryListing() as $child) {
-			array_push($relativePaths, ...$this->collectRelativeFilePaths($child, $userFolder));
+			array_push(
+				$relativePaths,
+				...$this->collectRelativeFilePaths($child, $userFolder, $maxFileSizeBytes, $enforcementMode, $warnings),
+			);
 		}
 
 		return $relativePaths;

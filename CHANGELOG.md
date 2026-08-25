@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-08-25
+
+### Fixed
+
+Three bugs found testing 0.1.18's new Settings pages against a real running instance:
+
+- The enforcement-mode radio buttons in **Settings > Administration > GitCloud** never visually filled in when clicked. `AdminSettings.vue` bound them with `:checked="enforcementMode"` / `@update:checked="..."`, but `NcCheckboxRadioSwitch` (as shipped in `@nextcloud/vue@9.6.0`) has no `checked` prop at all — it only exposes `modelValue`/`update:modelValue`, so the binding was silently a no-op extra attribute and the click handler never ran. Switched both radios to `v-model="enforcementMode"`.
+- **Settings > Administration > GitCloud**'s sidebar icon rendered solid black while every other section's icon rendered white in dark theme. The Settings navigation applies a `filter: var(--background-invert-if-dark)` CSS filter to section icons, which assumes icons are authored with a **black** fill (inverted to white only in dark theme) — confirmed by inspecting core's own admin sections (`Sharing.php` → `actions/share.svg`) and a third-party app's pattern (`user_ldap/lib/Settings/Section.php` → a dedicated `app-dark.svg`, distinct from its `app.svg`). `AdminSection::getIcon()` was instead reusing `app.svg`, which has `fill="white"` (correct for the colored-circle background of the main Nextcloud left nav, which doesn't apply this filter) — inverted, white becomes black. Added a new `img/app-dark.svg` (same glyph, black fill) and pointed `AdminSection::getIcon()` at it.
+- **Settings > Personal > GitCloud** never appeared in the sidebar at all, even for an admin account. `Personal::getSection()` returned `'additional'` to reuse Nextcloud's built-in "Additional settings" personal section, but `\OC\Settings\Manager::getPersonalSections()` only creates that section's sidebar entry when **two or more** apps register a personal setting under it (`count($this->getPersonalSettings('additional')) > 1`) — with GitCloud the only app using it in this environment, the count was 1 and the whole section (GitCloud's only personal page) was silently dropped. Added a dedicated `lib/Settings/PersonalSection.php` (mirroring `AdminSection.php`, registered via a new `<personal-section>` in `info.xml`) so the page no longer depends on another app sharing "Additional settings".
+
+Full PHPUnit suite (48 tests) verified passing inside the running `stable34` container; `composer lint` and a clean `vite build` also verified. The radio-button and icon fixes could not be visually re-verified in a browser per this project's rules (code-changes-only, no driving the app) — verified by reading `@nextcloud/vue`'s actual component props/source and core's own icon-file conventions instead; the user should confirm both in their running instance.
+
+## [0.1.18] - 2026-08-25
+
+### Added
+
+- GitCloud now has real pages in Nextcloud's Settings UI, separate from its own dashboard/nav entry (Phase 3-adjacent groundwork, not part of the original roadmap phases).
+  - **Settings > Administration > GitCloud** (new dedicated section, `lib/Settings/AdminSection.php` + `lib/Settings/Admin.php`, first use of `OCP\Settings\IIconSection`/`IDelegatedSettings` and `OCP\IAppConfig` in this codebase) lets an admin set a maximum file size (in MB, default 100) and choose an enforcement mode: **Block** (default) rejects a commit containing an oversized file, or **Warn** commits it anyway and reports it back. Saving goes through a new `POST /apps/gitcloud/admin/settings` endpoint gated by `#[AuthorizedAdminSetting]`, so delegated admins (not just full admins) can manage it.
+  - **Settings > Personal > GitCloud** (`lib/Settings/Personal.php`) lets each user permanently delete their own GitCloud commit history to reclaim disk space: a new `POST /apps/gitcloud/history/delete` endpoint (`VcsService::deleteHistory`) deletes the repository's `.git` directory and reinitializes an empty one, and clears every `gitcloud_snapshots` row for that user (`SnapshotMapper::deleteAllForUser`) since their commit hashes are no longer valid afterward. Working-tree files are untouched — only history is wiped. This is irreversible, so the UI (`PersonalSettings.vue`) requires typing "delete" into a confirmation field before the action is enabled, a step up from `RollbackPanel`'s existing two-button confirm dialog.
+- `ApiController::commitChanges` now enforces the admin-configured file-size limit per file during the existing folder-expansion walk (`collectRelativeFilePaths`): an oversized file either aborts the whole commit with a clear error (Block mode, mirroring the existing `NotLocalStorageException` all-or-nothing behavior, via a new `FileTooLargeException`) or is committed anyway with its path reported in a new optional `warnings` array on the success response (Warn mode), which `CommitDialog.vue` now surfaces as a note card listing the oversized files that were committed.
+
+### Fixed
+
+- `ApiController::commitChanges`'s docblock declared `@param string[] $files`, which the OpenAPI extractor rejects as an ambiguous array syntax (unrelated to this release's actual feature work, but it blocked regenerating the spec for the new endpoints above) — changed to `list<string>`.
+
+Full PHPUnit suite (48 tests, up from 37) and `composer openapi` verified passing inside the running `stable34` container; `composer lint` and a clean `vite build` also verified. Psalm's pre-existing baseline (95 findings before this change, tracked since 0.1.14 as an unrelated stub/environment issue) rose to 109 with this change — the added findings are `Mixed*` types from `VcsService::removeDirectoryRecursive`'s `RecursiveDirectoryIterator` walk (the same untyped-`SplFileInfo` pattern Psalm already can't resolve in the pre-existing `getRepositoryStatus`) and `PossiblyUnusedMethod` on the new DI-constructed `Settings\*` classes' constructors (Psalm doesn't see Nextcloud's `info.xml`-driven settings-class instantiation as a "call"), neither of which reflects a real defect.
+
 ## [0.1.17] - 2026-08-24
 
 ### Fixed
