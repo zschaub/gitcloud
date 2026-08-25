@@ -235,55 +235,6 @@ class VcsService {
 	}
 
 	/**
-	 * Computes live stats (file/dir counts, total size, and Git status) for the
-	 * repository rooted at $repositoryPath, for display on the dashboard.
-	 * @return array{success: bool, message?: string, fileCount?: int, dirCount?: int, totalSizeBytes?: int, gitStatus?: string}
-	 */
-	public function getRepositoryStatus(string $repositoryPath): array {
-		if (!is_dir($repositoryPath)) {
-			$this->logger->warning(sprintf('Repository path does not exist: %s', $repositoryPath));
-			return ['success' => false, 'message' => 'Repository path does not exist.'];
-		}
-
-		$fileCount = 0;
-		$dirCount = 0;
-		$totalSizeBytes = 0;
-
-		$iterator = new \RecursiveIteratorIterator(
-			new \RecursiveDirectoryIterator($repositoryPath, \FilesystemIterator::SKIP_DOTS),
-			\RecursiveIteratorIterator::SELF_FIRST,
-		);
-
-		foreach ($iterator as $entry) {
-			if (str_contains($entry->getPathname(), DIRECTORY_SEPARATOR . '.git' . DIRECTORY_SEPARATOR)
-				|| str_ends_with($entry->getPathname(), DIRECTORY_SEPARATOR . '.git')) {
-				continue;
-			}
-
-			if ($entry->isDir()) {
-				$dirCount++;
-			} else {
-				$fileCount++;
-				$totalSizeBytes += $entry->getSize();
-			}
-		}
-
-		$gitStatus = 'Uninitialized';
-		if (is_dir($repositoryPath . '/.git')) {
-			$statusResult = $this->runGit($repositoryPath, ['status', '--porcelain']);
-			$gitStatus = ($statusResult['success'] && trim($statusResult['output']) === '') ? 'Clean' : 'Modified';
-		}
-
-		return [
-			'success' => true,
-			'fileCount' => $fileCount,
-			'dirCount' => $dirCount,
-			'totalSizeBytes' => $totalSizeBytes,
-			'gitStatus' => $gitStatus,
-		];
-	}
-
-	/**
 	 * Computes total size and Git status scoped to a specific set of files within
 	 * the repository rooted at $repositoryPath, for the dashboard's Directory Detail view.
 	 * @param string[] $relativeFilePaths

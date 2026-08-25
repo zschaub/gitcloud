@@ -595,32 +595,133 @@ final class ApiTest extends TestCase {
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getStorage')->willReturn($storage);
 		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['readme.txt', true],
+			['folder/a.txt', true],
+			['folder/b.txt', true],
+		]);
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => '/', 'files' => ['readme.txt']],
+				['path' => 'folder', 'files' => ['folder/a.txt', 'folder/b.txt']],
+			]);
 		$vcsService->expects($this->once())
-			->method('getRepositoryStatus')
-			->with('/data/testuser/files')
+			->method('getDirectoryStatus')
+			->with('/data/testuser/files', ['readme.txt', 'folder/a.txt', 'folder/b.txt'])
 			->willReturn([
 				'success' => true,
-				'fileCount' => 5,
-				'dirCount' => 2,
 				'totalSizeBytes' => 2 * 1024 * 1024,
 				'gitStatus' => 'Clean',
 			]);
-		$vcsService->expects($this->never())->method('getDirectoryStatus');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 
 		$response = $controller->getStatus();
 
 		$this->assertEquals('success', $response->getData()['status']);
-		$this->assertEquals(5, $response->getData()['fileCount']);
+		$this->assertEquals(3, $response->getData()['fileCount']);
 		$this->assertEquals(2, $response->getData()['dirCount']);
 		$this->assertEquals(2.0, $response->getData()['totalSizeMb']);
 		$this->assertEquals('Clean', $response->getData()['gitStatus']);
+	}
+
+	public function testGetStatusExcludesDirectoriesWithAllFilesDeletedFromDirCount(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['readme.txt', true],
+			['deleted-folder/gone.txt', false],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => '/', 'files' => ['readme.txt']],
+				['path' => 'deleted-folder', 'files' => ['deleted-folder/gone.txt']],
+			]);
+		$vcsService->expects($this->once())
+			->method('getDirectoryStatus')
+			->with('/data/testuser/files', ['readme.txt'])
+			->willReturn([
+				'success' => true,
+				'totalSizeBytes' => 1024,
+				'gitStatus' => 'Clean',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getStatus();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(1, $response->getData()['fileCount']);
+		$this->assertEquals(1, $response->getData()['dirCount']);
+	}
+
+	public function testGetStatusReturnsEmptyStatsWhenNothingCommitted(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([]);
+		$vcsService->expects($this->once())
+			->method('getDirectoryStatus')
+			->with('/data/testuser/files', [])
+			->willReturn([
+				'success' => true,
+				'totalSizeBytes' => 0,
+				'gitStatus' => 'Uninitialized',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getStatus();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(0, $response->getData()['fileCount']);
+		$this->assertEquals(0, $response->getData()['dirCount']);
+		$this->assertEquals(0.0, $response->getData()['totalSizeMb']);
+		$this->assertEquals('Uninitialized', $response->getData()['gitStatus']);
 	}
 
 	public function testGetStatusScopesStatsToDirectoryWhenGiven(): void {
@@ -662,7 +763,6 @@ final class ApiTest extends TestCase {
 				'totalSizeBytes' => 512 * 1024,
 				'gitStatus' => 'Modified',
 			]);
-		$vcsService->expects($this->never())->method('getRepositoryStatus');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
 

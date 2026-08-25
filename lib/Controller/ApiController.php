@@ -248,32 +248,24 @@ class ApiController extends OCSController {
 			return $repositoryPath;
 		}
 
-		if ($directory === '') {
-			$result = $this->vcsService->getRepositoryStatus($repositoryPath);
-			if (!$result['success']) {
-				return new DataResponse(
-					[
-						'status' => 'error',
-						'message' => $result['message'],
-					],
-					Http::STATUS_BAD_REQUEST,
-				);
-			}
-
-			return new DataResponse(
-				[
-					'status' => 'success',
-					'fileCount' => $result['fileCount'],
-					'dirCount' => $result['dirCount'],
-					'totalSizeMb' => round($result['totalSizeBytes'] / 1024 / 1024, 1),
-					'gitStatus' => $result['gitStatus'],
-				],
-				Http::STATUS_OK,
-			);
-		}
-
 		$userId = $this->userSession->getUser()->getUID();
-		$existingFiles = $this->resolveExistingFilesForDirectory($userFolder, $userId, $directory);
+
+		if ($directory === '') {
+			$dirCount = 0;
+			$existingFiles = [];
+			foreach ($this->vcsService->getCommittedDirectories($userId) as $committedDirectory) {
+				$directoryExistingFiles = $this->filterExistingFiles($userFolder, $committedDirectory['files']);
+				if ($directoryExistingFiles === []) {
+					continue;
+				}
+
+				$dirCount++;
+				array_push($existingFiles, ...$directoryExistingFiles);
+			}
+		} else {
+			$dirCount = 0;
+			$existingFiles = $this->resolveExistingFilesForDirectory($userFolder, $userId, $directory);
+		}
 
 		$result = $this->vcsService->getDirectoryStatus($repositoryPath, $existingFiles);
 		if (!$result['success']) {
@@ -290,7 +282,7 @@ class ApiController extends OCSController {
 			[
 				'status' => 'success',
 				'fileCount' => count($existingFiles),
-				'dirCount' => 0,
+				'dirCount' => $dirCount,
 				'totalSizeMb' => round($result['totalSizeBytes'] / 1024 / 1024, 1),
 				'gitStatus' => $result['gitStatus'],
 			],
