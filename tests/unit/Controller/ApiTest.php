@@ -957,7 +957,7 @@ final class ApiTest extends TestCase {
 		$this->assertStringContainsString('100 MB', $response->getData()['message']);
 	}
 
-	public function testCommitChangesAllowsFileOverLimitInWarnModeAndReturnsWarning(): void {
+	public function testCommitChangesReturnsWarningWithoutCommittingWhenFileOverLimitInWarnModeUnconfirmed(): void {
 		$request = $this->createMock(IRequest::class);
 
 		$user = $this->createMock(IUser::class);
@@ -985,7 +985,51 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
-		$vcsService->method('commitChanges')
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->method('getValueInt')->willReturn(100);
+		$appConfig->method('getValueString')->willReturn('warn');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->commitChanges(['big.txt'], 'Initial commit');
+
+		$this->assertEquals('warning', $response->getData()['status']);
+		$this->assertEquals(['big.txt'], $response->getData()['warnings']);
+		$this->assertEquals(200, $response->getStatus());
+	}
+
+	public function testCommitChangesCommitsOverLimitFileInWarnModeWhenConfirmed(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$file1 = $this->createMock(Node::class);
+		$file1->method('getStorage')->willReturn($storage);
+		$file1->method('getPath')->willReturn('/testuser/files/big.txt');
+		$file1->method('getSize')->willReturn(200 * 1024 * 1024);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('big.txt')->willReturn($file1);
+		$userFolder->method('getRelativePath')->with('/testuser/files/big.txt')->willReturn('/big.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->once())
+			->method('commitChanges')
 			->with('/data/testuser/files', ['big.txt'], 'Initial commit', 'testuser')
 			->willReturn([
 				'success' => true,
@@ -998,10 +1042,52 @@ final class ApiTest extends TestCase {
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
 
-		$response = $controller->commitChanges(['big.txt'], 'Initial commit');
+		$response = $controller->commitChanges(['big.txt'], 'Initial commit', confirmed: true);
 
 		$this->assertEquals('success', $response->getData()['status']);
 		$this->assertEquals(['big.txt'], $response->getData()['warnings']);
+	}
+
+	public function testCommitChangesStillRejectsFileOverLimitInBlockModeEvenWhenConfirmed(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$file1 = $this->createMock(Node::class);
+		$file1->method('getStorage')->willReturn($storage);
+		$file1->method('getPath')->willReturn('/testuser/files/big.txt');
+		$file1->method('getSize')->willReturn(200 * 1024 * 1024);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('big.txt')->willReturn($file1);
+		$userFolder->method('getRelativePath')->with('/testuser/files/big.txt')->willReturn('/big.txt');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->method('getValueInt')->willReturn(100);
+		$appConfig->method('getValueString')->willReturn('block');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+
+		$response = $controller->commitChanges(['big.txt'], 'Initial commit', confirmed: true);
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertStringContainsString('big.txt', $response->getData()['message']);
 	}
 
 	public function testCommitChangesSucceedsWhenAllFilesUnderLimit(): void {

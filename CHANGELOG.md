@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-08-25
+
+### Changed
+
+- Committing a file over the admin-configured size limit in **Warn** enforcement mode used to commit it immediately and only mention it afterward as a small note card next to the success message — easy to miss, and with no way to back out once it had already happened. `POST /apps/gitcloud/commit` now takes a `confirmed` flag (default `false`); when oversized files are found and `confirmed` is `false`, it returns `status: "warning"` with the offending file list **without committing anything**. `CommitDialog.vue` shows this as a blocking popup ("Git may not handle this correctly due to size") listing the files, with Commit/Cancel buttons — Commit re-submits the same request with `confirmed: true` (which then actually runs the commit), Cancel returns to the still-open commit dialog untouched. Block mode is unaffected — it continues to reject an oversized file outright via `FileTooLargeException` regardless of `confirmed`, both because that's already a hard pre-commit gate and because the user confirmed Block already worked correctly; only Warn mode's UX changed.
+
+Covered by three new/rewritten `ApiTest` cases (`testCommitChangesReturnsWarningWithoutCommittingWhenFileOverLimitInWarnModeUnconfirmed`, `testCommitChangesCommitsOverLimitFileInWarnModeWhenConfirmed`, `testCommitChangesStillRejectsFileOverLimitInBlockModeEvenWhenConfirmed`); full PHPUnit suite (54 tests) and `composer openapi` verified passing inside the running `stable34` container; `composer lint` and a clean `vite build` also verified.
+
 ## [0.1.21] - 2026-08-25
 
 ### Added

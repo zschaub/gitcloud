@@ -81,6 +81,11 @@
                                         "type": "string",
                                         "default": "",
                                         "description": "The commit message."
+                                    },
+                                    "confirmed": {
+                                        "type": "boolean",
+                                        "default": false,
+                                        "description": "Whether the user has already confirmed committing file(s) that exceed the configured size limit under \"warn\" enforcement mode. Ignored in \"block\" mode, which always rejects an oversized file outright regardless of this flag."
                                     }
                                 }
                             }
@@ -101,7 +106,7 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Commit successful, data returned.",
+                        "description": "Commit successful (status \"success\"), or awaiting confirmation of oversized file(s) in warn mode (status \"warning\", nothing committed yet).",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -121,25 +126,57 @@
                                                     "$ref": "#/components/schemas/OCSMeta"
                                                 },
                                                 "data": {
-                                                    "type": "object",
-                                                    "required": [
-                                                        "status",
-                                                        "message"
-                                                    ],
-                                                    "properties": {
-                                                        "status": {
-                                                            "type": "string"
+                                                    "anyOf": [
+                                                        {
+                                                            "type": "object",
+                                                            "required": [
+                                                                "status",
+                                                                "message"
+                                                            ],
+                                                            "properties": {
+                                                                "status": {
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                        "success"
+                                                                    ]
+                                                                },
+                                                                "message": {
+                                                                    "type": "string"
+                                                                },
+                                                                "warnings": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                        "type": "string"
+                                                                    }
+                                                                }
+                                                            }
                                                         },
-                                                        "message": {
-                                                            "type": "string"
-                                                        },
-                                                        "warnings": {
-                                                            "type": "array",
-                                                            "items": {
-                                                                "type": "string"
+                                                        {
+                                                            "type": "object",
+                                                            "required": [
+                                                                "status",
+                                                                "message",
+                                                                "warnings"
+                                                            ],
+                                                            "properties": {
+                                                                "status": {
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                        "warning"
+                                                                    ]
+                                                                },
+                                                                "message": {
+                                                                    "type": "string"
+                                                                },
+                                                                "warnings": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                        "type": "string"
+                                                                    }
+                                                                }
                                                             }
                                                         }
-                                                    }
+                                                    ]
                                                 }
                                             }
                                         }
@@ -651,7 +688,7 @@
         "/ocs/v2.php/apps/gitcloud/directories": {
             "get": {
                 "operationId": "api-get-directories",
-                "summary": "Returns the directories the current user has ever committed files under, each with the list of files tracked in it and each file's Modified/Unchanged status relative to HEAD, for the dashboard's committed-directories list.",
+                "summary": "Returns the directories the current user has ever committed files under, each with the list of files tracked in it and each file's status relative to HEAD ('Modified'/'Unchanged'), for the dashboard's committed-directories list. A subfolder (not the repository root) that already has at least one committed file also surfaces any other files sitting in it that have never been committed, tagged 'Uncommitted', so newly added files aren't invisible until a user manually commits them.",
                 "tags": [
                     "api"
                 ],

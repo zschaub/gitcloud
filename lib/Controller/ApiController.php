@@ -44,15 +44,18 @@ class ApiController extends OCSController {
 	 *
 	 * @param list<string> $files File paths, relative to the user's storage, to stage and commit.
 	 * @param string $message The commit message.
-	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string, warnings?: list<string>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 * @param bool $confirmed Whether the user has already confirmed committing file(s) that exceed the
+	 *                        configured size limit under "warn" enforcement mode. Ignored in "block" mode,
+	 *                        which always rejects an oversized file outright regardless of this flag.
+	 * @return DataResponse<Http::STATUS_OK, array{status: 'success', message: string, warnings?: list<string>}|array{status: 'warning', message: string, warnings: list<string>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
-	 * 200: Commit successful, data returned.
+	 * 200: Commit successful (status "success"), or awaiting confirmation of oversized file(s) in warn mode (status "warning", nothing committed yet).
 	 * 400: Missing or invalid data, or the commit failed.
 	 * 401: No user is logged in.
 	 */
 	#[NoAdminRequired]
 	#[ApiRoute(verb: 'POST', url: '/commit')]
-	public function commitChanges(array $files = [], string $message = ''): DataResponse {
+	public function commitChanges(array $files = [], string $message = '', bool $confirmed = false): DataResponse {
 		if (empty($files) || trim($message) === '') {
 			return new DataResponse(
 				[
@@ -127,6 +130,17 @@ class ApiController extends OCSController {
 					'message' => 'No valid files were provided.',
 				],
 				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		if (!empty($warnings) && !$confirmed) {
+			return new DataResponse(
+				[
+					'status' => 'warning',
+					'message' => 'One or more files exceed the configured size limit and may not be handled correctly by Git.',
+					'warnings' => $warnings,
+				],
+				Http::STATUS_OK,
 			);
 		}
 

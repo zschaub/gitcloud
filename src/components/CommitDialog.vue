@@ -21,6 +21,10 @@ const status = ref<null | "loading" | "success" | "error">(null);
 const resultMessage = ref("");
 const warnings = ref<string[]>([]);
 
+const pendingConfirmation = ref(false);
+const pendingWarningFiles = ref<string[]>([]);
+const isConfirming = ref(false);
+
 watch(
     () => props.open,
     (isOpen) => {
@@ -29,6 +33,8 @@ watch(
             status.value = null;
             resultMessage.value = "";
             warnings.value = [];
+            pendingConfirmation.value = false;
+            pendingWarningFiles.value = [];
         }
     },
 );
@@ -45,18 +51,30 @@ const commitDisabled = computed(
     () => message.value.trim() === "" || status.value === "loading" || status.value === "success",
 );
 
+async function postCommit(confirmed: boolean) {
+    return axios.post(generateOcsUrl("apps/gitcloud/commit"), {
+        files: props.files,
+        message: message.value,
+        confirmed,
+    });
+}
+
 async function submitCommit() {
     if (message.value.trim() === "" || status.value === "loading") return false;
 
     status.value = "loading";
     try {
-        const response = await axios.post(generateOcsUrl("apps/gitcloud/commit"), {
-            files: props.files,
-            message: message.value,
-        });
+        const response = await postCommit(false);
+        const data = response.data.ocs.data;
+        if (data.status === "warning") {
+            pendingWarningFiles.value = data.warnings ?? [];
+            pendingConfirmation.value = true;
+            status.value = null;
+            return false;
+        }
         status.value = "success";
-        resultMessage.value = response.data.ocs.data.message;
-        warnings.value = response.data.ocs.data.warnings ?? [];
+        resultMessage.value = data.message;
+        warnings.value = data.warnings ?? [];
         emit("committed");
     } catch (error) {
         status.value = "error";
@@ -65,6 +83,31 @@ async function submitCommit() {
             axiosError.response?.data?.ocs?.data?.message ?? "Failed to commit changes to GitCloud.";
     }
     return false;
+}
+
+async function confirmCommit() {
+    isConfirming.value = true;
+    try {
+        const response = await postCommit(true);
+        pendingConfirmation.value = false;
+        status.value = "success";
+        resultMessage.value = response.data.ocs.data.message;
+        warnings.value = response.data.ocs.data.warnings ?? [];
+        emit("committed");
+    } catch (error) {
+        pendingConfirmation.value = false;
+        status.value = "error";
+        const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
+        resultMessage.value =
+            axiosError.response?.data?.ocs?.data?.message ?? "Failed to commit changes to GitCloud.";
+    } finally {
+        isConfirming.value = false;
+    }
+}
+
+function cancelPendingConfirmation() {
+    pendingConfirmation.value = false;
+    pendingWarningFiles.value = [];
 }
 
 function close() {
@@ -92,6 +135,20 @@ const buttons = computed(() => {
         },
     ];
 });
+
+const confirmButtons = computed(() => [
+    {
+        label: "Cancel",
+        variant: "tertiary" as const,
+        callback: () => cancelPendingConfirmation(),
+    },
+    {
+        label: isConfirming.value ? "Committing…" : "Commit",
+        variant: "primary" as const,
+        disabled: isConfirming.value,
+        callback: confirmCommit,
+    },
+]);
 </script>
 
 <template>
@@ -130,6 +187,24 @@ const buttons = computed(() => {
                 </ul>
             </NcNoteCard>
         </div>
+    </NcDialog>
+
+    <NcDialog
+        :open="pendingConfirmation"
+        name="File size warning"
+        size="small"
+        :buttons="confirmButtons"
+        @update:open="(value) => !value && cancelPendingConfirmation()"
+    >
+        <p class="commit-dialog__confirm-message">
+            Git may not handle this correctly due to size:
+        </p>
+        <ul class="commit-dialog__warnings">
+            <li v-for="file in pendingWarningFiles" :key="file">{{ fileName(file) }}</li>
+        </ul>
+        <p class="commit-dialog__confirm-message">
+            Commit anyway, or cancel and remove the oversized file(s) first.
+        </p>
     </NcDialog>
 </template>
 
@@ -175,5 +250,10 @@ const buttons = computed(() => {
 .commit-dialog__warnings {
     margin: 0;
     padding-left: 18px;
+}
+
+.commit-dialog__confirm-message {
+    font-size: 13px;
+    line-height: 1.5;
 }
 </style>
