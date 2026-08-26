@@ -22,6 +22,8 @@ use OCP\DB\Types;
  * @method string getStatus()
  * @method void setCreatedAt(int $createdAt)
  * @method int getCreatedAt()
+ * @method void setFileId(?int $fileId)
+ * @method int|null getFileId()
  */
 class Snapshot extends Entity {
 	protected string $userId = '';
@@ -31,6 +33,7 @@ class Snapshot extends Entity {
 	protected ?int $parentSnapshotId = null;
 	protected string $status = 'committed';
 	protected int $createdAt = 0;
+	protected ?int $fileId = null;
 
 	public function __construct() {
 		$this->addType('userId', Types::STRING);
@@ -40,5 +43,6 @@ class Snapshot extends Entity {
 		$this->addType('parentSnapshotId', Types::INTEGER);
 		$this->addType('status', Types::STRING);
 		$this->addType('createdAt', Types::INTEGER);
+		$this->addType('fileId', Types::INTEGER);
 	}
 }

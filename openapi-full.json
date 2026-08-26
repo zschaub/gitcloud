@@ -688,7 +688,7 @@
         "/ocs/v2.php/apps/gitcloud/directories": {
             "get": {
                 "operationId": "api-get-directories",
-                "summary": "Returns the directories the current user has ever committed files under, each with the list of files tracked in it and each file's status relative to HEAD ('Modified'/'Unchanged'), for the dashboard's committed-directories list. A subfolder (not the repository root) that already has at least one committed file also surfaces any other files sitting in it that have never been committed, tagged 'Uncommitted', so newly added files aren't invisible until a user manually commits them.",
+                "summary": "Returns the directories the current user has ever committed files under, each with the list of files tracked in it and each file's status relative to HEAD ('Modified'/'Unchanged'), for the dashboard's committed-directories list. A subfolder (not the repository root) that already has at least one committed file also surfaces any other files sitting in it that have never been committed, tagged 'Uncommitted', so newly added files aren't invisible until a user manually commits them. A committed file that no longer exists because it was deleted outside GitCloud (and auto-committed as such, see GitTrackedNodeDeletedListener) is kept in the list tagged 'Deleted' instead of being silently dropped, so its history stays reachable/restorable.",
                 "tags": [
                     "api"
                 ],

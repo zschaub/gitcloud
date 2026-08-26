@@ -15,7 +15,8 @@
 2. **Open the GitCloud tab.** Select **GitCloud** from the Nextcloud left navigation to open the dashboard.
    - **Overview** lists every directory you've committed files under, with aggregate stats (files tracked, directories, total size, Git status) and a search box to filter the list.
    - Selecting a directory switches to **Directory Detail**, showing that directory's committed files with a Modified/Unchanged status per file. From here you can select files and commit further changes, or open a file's **History** to view its snapshot timeline and roll back to an earlier version.
-3. **Configure GitCloud in Nextcloud Settings.**
+3. **Delete, rename, or move a tracked file however you normally would** (Files app, WebDAV, sync client, etc.) — no need to do this "through" GitCloud. GitCloud detects the change immediately and auto-commits it to keep its history in sync: a deleted file shows a **Deleted** status in Directory Detail (its History and Rollback still work, and rolling back recreates the file); a renamed or moved file's history automatically follows it to its new location.
+4. **Configure GitCloud in Nextcloud Settings.**
    - **Settings > Administration > GitCloud** lets an admin set the maximum file size GitCloud will commit and whether an oversized file blocks the commit (default) or is committed anyway with a warning.
    - **Settings > Personal > GitCloud** lets each user permanently delete their own GitCloud commit history (a full Git history wipe, not just the visible list) to reclaim disk space; their current files are not affected.
 
@@ -23,7 +24,7 @@
 
 - **App Name:** GitCloud
 - **Base Directory:** `gitcloud`
-- **Status:** Phase 1 and Phase 2 complete, plus admin/personal Settings pages (max file size limit, personal commit-history deletion). Phase 3 not yet started. This README will be updated as features are implemented.
+- **Status:** Phase 1 and Phase 2 complete, plus admin/personal Settings pages (max file size limit, personal commit-history deletion) and automatic tracking of files deleted/renamed/moved outside GitCloud. Phase 3 not yet started. This README will be updated as features are implemented.
 
 ## Development Roadmap & Milestones
 

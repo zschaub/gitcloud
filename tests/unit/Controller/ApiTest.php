@@ -12,6 +12,7 @@ use OCP\Files\Cache\IUpdater;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
+use OCP\Files\NotFoundException;
 use OCP\Files\Storage\IStorage;
 use OCP\IAppConfig;
 use OCP\IRequest;
@@ -48,10 +49,12 @@ final class ApiTest extends TestCase {
 		$file1 = $this->createMock(Node::class);
 		$file1->method('getStorage')->willReturn($storage);
 		$file1->method('getPath')->willReturn('/testuser/files/file1.txt');
+		$file1->method('getId')->willReturn(101);
 
 		$file2 = $this->createMock(Node::class);
 		$file2->method('getStorage')->willReturn($storage);
 		$file2->method('getPath')->willReturn('/testuser/files/file2.txt');
+		$file2->method('getId')->willReturn(102);
 
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getStorage')->willReturn($storage);
@@ -70,7 +73,10 @@ final class ApiTest extends TestCase {
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('commitChanges')
-			->with('/data/testuser/files', ['file1.txt', 'file2.txt'], 'Initial commit', 'testuser')
+			->with('/data/testuser/files', [
+				['path' => 'file1.txt', 'fileId' => 101],
+				['path' => 'file2.txt', 'fileId' => 102],
+			], 'Initial commit', 'testuser')
 			->willReturn([
 				'success' => true,
 				'message' => 'Successfully staged and committed changes.',
@@ -103,10 +109,12 @@ final class ApiTest extends TestCase {
 		$fileA = $this->createMock(Node::class);
 		$fileA->method('getStorage')->willReturn($storage);
 		$fileA->method('getPath')->willReturn('/testuser/files/folder/a.txt');
+		$fileA->method('getId')->willReturn(201);
 
 		$fileB = $this->createMock(Node::class);
 		$fileB->method('getStorage')->willReturn($storage);
 		$fileB->method('getPath')->willReturn('/testuser/files/folder/sub/b.txt');
+		$fileB->method('getId')->willReturn(202);
 
 		$subFolder = $this->createMock(Folder::class);
 		$subFolder->method('getStorage')->willReturn($storage);
@@ -130,7 +138,10 @@ final class ApiTest extends TestCase {
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('commitChanges')
-			->with('/data/testuser/files', ['folder/a.txt', 'folder/sub/b.txt'], 'Initial commit', 'testuser')
+			->with('/data/testuser/files', [
+				['path' => 'folder/a.txt', 'fileId' => 201],
+				['path' => 'folder/sub/b.txt', 'fileId' => 202],
+			], 'Initial commit', 'testuser')
 			->willReturn([
 				'success' => true,
 				'message' => 'Successfully staged and committed changes.',
@@ -225,6 +236,7 @@ final class ApiTest extends TestCase {
 		$file1 = $this->createMock(Node::class);
 		$file1->method('getStorage')->willReturn($storage);
 		$file1->method('getPath')->willReturn('/testuser/files/file1.txt');
+		$file1->method('getId')->willReturn(101);
 
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getStorage')->willReturn($storage);
@@ -237,7 +249,7 @@ final class ApiTest extends TestCase {
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('commitChanges')
-			->with('/data/testuser/files', ['file1.txt'], '0', 'testuser')
+			->with('/data/testuser/files', [['path' => 'file1.txt', 'fileId' => 101]], '0', 'testuser')
 			->willReturn([
 				'success' => true,
 				'message' => 'Successfully staged and committed changes.',
@@ -350,6 +362,69 @@ final class ApiTest extends TestCase {
 		$this->assertEquals(401, $response->getStatus());
 	}
 
+	public function testGetSnapshotsFallsBackToPathHistoryWhenFileNoLongerExists(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('get')->with('deleted.txt')->willThrowException(new NotFoundException());
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$snapshot = new Snapshot();
+		$snapshot->setId(1);
+		$snapshot->setCommitHash('abc123');
+		$snapshot->setMessage('Auto-commit: deleted deleted.txt');
+		$snapshot->setStatus('deleted');
+		$snapshot->setCreatedAt(1000);
+		$snapshot->setParentSnapshotId(null);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getSnapshotsForFile')
+			->with('testuser', 'deleted.txt')
+			->willReturn([$snapshot]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getSnapshots('deleted.txt');
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertCount(1, $response->getData()['snapshots']);
+		$this->assertEquals('deleted', $response->getData()['snapshots'][0]['status']);
+	}
+
+	public function testGetSnapshotsFailsWhenFileNotFoundAndNoHistoryExists(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('get')->with('nonexistent.txt')->willThrowException(new NotFoundException());
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getSnapshotsForFile')->with('testuser', 'nonexistent.txt')->willReturn([]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getSnapshots('nonexistent.txt');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
 	public function testRollbackSnapshotSucceedsWithValidFileAndSnapshotId(): void {
 		$request = $this->createMock(IRequest::class);
 
@@ -439,6 +514,46 @@ final class ApiTest extends TestCase {
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
 		$this->assertEquals('error', $response->getData()['status']);
+	}
+
+	public function testRollbackSnapshotRestoresDeletedFileViaUserFolderUpdater(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$updater = $this->createMock(IUpdater::class);
+		$updater->expects($this->once())->method('update')->with('files/deleted.txt');
+		$storage->method('getUpdater')->willReturn($updater);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('deleted.txt')->willThrowException(new NotFoundException());
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('rollbackToSnapshot')
+			->with('/data/testuser/files', 'deleted.txt', 1, 'testuser')
+			->willReturn([
+				'success' => true,
+				'message' => 'Successfully rolled back deleted.txt to the selected snapshot.',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->rollbackSnapshot('deleted.txt', 1);
+
+		$this->assertEquals('success', $response->getData()['status']);
 	}
 
 	public function testRollbackSnapshotFailsWithoutFileOrSnapshotId(): void {
@@ -559,6 +674,58 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('success', $response->getData()['status']);
 		$this->assertEquals([
 			['path' => '/', 'files' => [['path' => 'readme.txt', 'status' => 'Unchanged']]],
+		], $response->getData()['directories']);
+	}
+
+	public function testGetDirectoriesSurfacesDeletedFileInsteadOfDroppingIt(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['folder/deleted.txt', false],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$deletedSnapshot = new Snapshot();
+		$deletedSnapshot->setStatus('deleted');
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => 'folder', 'files' => ['folder/deleted.txt']],
+			]);
+		$vcsService->method('getSnapshotsForFile')
+			->with('testuser', 'folder/deleted.txt')
+			->willReturn([$deletedSnapshot]);
+		// The deleted path has nothing left in the working tree to shell out
+		// `git status` for, so it must not be included in the batched call.
+		$vcsService->expects($this->once())
+			->method('getFileStatuses')
+			->with('/data/testuser/files', [])
+			->willReturn([]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->getDirectories();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals([
+			['path' => 'folder', 'files' => [['path' => 'folder/deleted.txt', 'status' => 'Deleted']]],
 		], $response->getData()['directories']);
 	}
 
@@ -1017,6 +1184,7 @@ final class ApiTest extends TestCase {
 		$file1->method('getStorage')->willReturn($storage);
 		$file1->method('getPath')->willReturn('/testuser/files/big.txt');
 		$file1->method('getSize')->willReturn(200 * 1024 * 1024);
+		$file1->method('getId')->willReturn(301);
 
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getStorage')->willReturn($storage);
@@ -1030,7 +1198,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->once())
 			->method('commitChanges')
-			->with('/data/testuser/files', ['big.txt'], 'Initial commit', 'testuser')
+			->with('/data/testuser/files', [['path' => 'big.txt', 'fileId' => 301]], 'Initial commit', 'testuser')
 			->willReturn([
 				'success' => true,
 				'message' => 'Successfully staged and committed changes.',
@@ -1107,6 +1275,7 @@ final class ApiTest extends TestCase {
 		$file1->method('getStorage')->willReturn($storage);
 		$file1->method('getPath')->willReturn('/testuser/files/file1.txt');
 		$file1->method('getSize')->willReturn(1024);
+		$file1->method('getId')->willReturn(101);
 
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getStorage')->willReturn($storage);
@@ -1119,7 +1288,7 @@ final class ApiTest extends TestCase {
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('commitChanges')
-			->with('/data/testuser/files', ['file1.txt'], 'Initial commit', 'testuser')
+			->with('/data/testuser/files', [['path' => 'file1.txt', 'fileId' => 101]], 'Initial commit', 'testuser')
 			->willReturn([
 				'success' => true,
 				'message' => 'Successfully staged and committed changes.',

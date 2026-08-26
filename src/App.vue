@@ -59,7 +59,11 @@ function extractErrorMessage(error: unknown, fallback: string): string {
 
 interface CommittedFile {
     path: string;
-    status: string; // 'Modified', 'Unchanged', or 'Uncommitted'
+    status: string; // 'Modified', 'Unchanged', 'Uncommitted', or 'Deleted'
+}
+
+function isDeleted(file: CommittedFile): boolean {
+    return file.status === "Deleted";
 }
 
 interface CommittedDirectory {
@@ -87,9 +91,10 @@ onMounted(() => {
 
 const searchTerm = ref("");
 
-function statusVariant(status: string): "clean" | "modified" | "uncommitted" | "unknown" {
+function statusVariant(status: string): "clean" | "modified" | "uncommitted" | "deleted" | "unknown" {
     if (status === "Modified") return "modified";
     if (status === "Uncommitted") return "uncommitted";
+    if (status === "Deleted") return "deleted";
     if (status === "Clean" || status === "Unchanged") return "clean";
     return "unknown";
 }
@@ -371,6 +376,8 @@ function onRolledBack() {
                                 type="checkbox"
                                 class="file-row__checkbox"
                                 :checked="selectedFiles.has(file.path)"
+                                :disabled="isDeleted(file)"
+                                :title="isDeleted(file) ? 'Deleted — use History to restore' : undefined"
                                 @change="toggleFileSelection(file.path)"
                             />
                             <span class="file-row__icon" v-html="FileDocumentOutlineIcon" />
@@ -505,6 +512,10 @@ h2 {
 
 .status-dot--uncommitted {
     background-color: var(--color-primary-element);
+}
+
+.status-dot--deleted {
+    background-color: var(--color-error);
 }
 
 .status-dot--unknown {
@@ -692,6 +703,10 @@ h2 {
     height: 16px;
     cursor: pointer;
     accent-color: var(--color-primary-element);
+}
+
+.file-row__checkbox:disabled {
+    cursor: not-allowed;
 }
 
 .file-row__name {

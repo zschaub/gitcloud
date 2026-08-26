@@ -9,6 +9,8 @@ use OCA\GitCloud\Db\SnapshotMapper;
 use OCA\GitCloud\Service\VcsService;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\Files\Folder;
+use OCP\Files\Storage\IStorage;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
@@ -32,7 +34,7 @@ final class VcsServiceTest extends TestCase {
 		$timeFactory->method('getTime')->willReturn(1720000000);
 
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->method('findAllForFile')->with('testuser', 'file1.txt')->willReturn([]);
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 42)->willReturn(null);
 		$snapshotMapper->expects($this->once())
 			->method('insert')
 			->with($this->callback(function (Snapshot $snapshot): bool {
@@ -41,18 +43,19 @@ final class VcsServiceTest extends TestCase {
 					&& $snapshot->getMessage() === 'Initial commit'
 					&& $snapshot->getParentSnapshotId() === null
 					&& $snapshot->getStatus() === 'committed'
+					&& $snapshot->getFileId() === 42
 					&& preg_match('/^[0-9a-f]{40}$/', $snapshot->getCommitHash()) === 1;
 			}))
 			->willReturnArgument(0);
 
 		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
 
-		$result = $service->commitChanges($this->tmpRepoPath, ['file1.txt'], 'Initial commit', 'testuser');
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 42]], 'Initial commit', 'testuser');
 
 		$this->assertTrue($result['success']);
 	}
 
-	public function testCommitChangesUsesMostRecentSnapshotAsParent(): void {
+	public function testCommitChangesUsesMostRecentSnapshotForSameFileIdAsParent(): void {
 		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
 		mkdir($this->tmpRepoPath);
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
@@ -65,7 +68,7 @@ final class VcsServiceTest extends TestCase {
 		$previousSnapshot->setId(7);
 
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->method('findAllForFile')->with('testuser', 'file1.txt')->willReturn([$previousSnapshot]);
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 42)->willReturn($previousSnapshot);
 		$snapshotMapper->expects($this->once())
 			->method('insert')
 			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getParentSnapshotId() === 7))
@@ -73,7 +76,34 @@ final class VcsServiceTest extends TestCase {
 
 		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
 
-		$result = $service->commitChanges($this->tmpRepoPath, ['file1.txt'], 'Second commit', 'testuser');
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 42]], 'Second commit', 'testuser');
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testCommitChangesStartsFreshChainWhenFileIdDiffersFromPriorPathHistory(): void {
+		// A file deleted and later recreated at the same path gets a new fileid
+		// from Nextcloud's filecache; the new commit must not be misattributed
+		// as a continuation of the old file's history just because the path matches.
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello again');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		// The old file's history lives under fileId 42; the recreated file has fileId 99.
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 99)->willReturn(null);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getParentSnapshotId() === null && $snapshot->getFileId() === 99))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 99]], 'Recreated file', 'testuser');
 
 		$this->assertTrue($result['success']);
 	}
@@ -102,6 +132,25 @@ final class VcsServiceTest extends TestCase {
 		$result = $service->createSnapshotRecord('testuser', 'file1.txt', 'abc123', 'Initial commit', null, 'committed');
 
 		$this->assertSame('testuser', $result->getUserId());
+		$this->assertNull($result->getFileId());
+	}
+
+	public function testCreateSnapshotRecordStoresGivenFileId(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getFileId() === 42))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->createSnapshotRecord('testuser', 'file1.txt', 'abc123', 'Initial commit', null, 'committed', 42);
+
+		$this->assertSame(42, $result->getFileId());
 	}
 
 	public function testUpdateSnapshotStatusUpdatesAndPersistsStatus(): void {
@@ -164,6 +213,7 @@ final class VcsServiceTest extends TestCase {
 		$targetSnapshot->setUserId('testuser');
 		$targetSnapshot->setFilePath('file1.txt');
 		$targetSnapshot->setCommitHash($originalCommitHash);
+		$targetSnapshot->setFileId(55);
 
 		$mostRecentSnapshot = new Snapshot();
 		$mostRecentSnapshot->setId(2);
@@ -177,7 +227,11 @@ final class VcsServiceTest extends TestCase {
 				return $snapshot->getUserId() === 'testuser'
 					&& $snapshot->getFilePath() === 'file1.txt'
 					&& $snapshot->getParentSnapshotId() === 2
-					&& $snapshot->getStatus() === 'rolled_back';
+					&& $snapshot->getStatus() === 'rolled_back'
+					// Carried forward from the target snapshot being restored to,
+					// so the new row still links to the same fileid identity - this
+					// also correctly handles rolling back an already-deleted file.
+					&& $snapshot->getFileId() === 55;
 			}))
 			->willReturnArgument(0);
 
@@ -535,5 +589,183 @@ final class VcsServiceTest extends TestCase {
 		$result = $service->deleteHistory('/nonexistent/path/' . uniqid(), 'testuser');
 
 		$this->assertFalse($result['success']);
+	}
+
+	public function testAutoCommitDeleteStagesRemovalAndRecordsDeletedSnapshot(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		// The file is already gone from the working tree by the time GitCloud
+		// reacts to the delete event - `git add` on a missing path stages the
+		// removal exactly like `git rm` would.
+		unlink($this->tmpRepoPath . '/file1.txt');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$previousSnapshot = new Snapshot();
+		$previousSnapshot->setId(3);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 42)->willReturn($previousSnapshot);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(function (Snapshot $snapshot): bool {
+				return $snapshot->getUserId() === 'testuser'
+					&& $snapshot->getFilePath() === 'file1.txt'
+					&& $snapshot->getParentSnapshotId() === 3
+					&& $snapshot->getStatus() === 'deleted'
+					&& $snapshot->getFileId() === 42
+					&& preg_match('/^[0-9a-f]{40}$/', $snapshot->getCommitHash()) === 1;
+			}))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitDelete($this->tmpRepoPath, 'file1.txt', 42, 'testuser');
+
+		$this->assertTrue($result['success']);
+
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' log -1 --pretty=%s', $logOutput);
+		$this->assertSame('Auto-commit: deleted file1.txt', $logOutput[0]);
+	}
+
+	public function testAutoCommitDeleteFailsWhenRepositoryNotInitialized(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('insert');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitDelete($this->tmpRepoPath, 'file1.txt', 42, 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
+
+	public function testAutoCommitDeleteFailsWhenNothingStagedForThatPath(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		// Nothing was ever committed at this path, so `git add` on it stages nothing.
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('insert');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitDelete($this->tmpRepoPath, 'never-committed.txt', 42, 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
+
+	public function testAutoCommitRenameStagesBothPathsAndRecordsCommittedSnapshotAtNewPath(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/old.txt', 'hello');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add old.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		// Nextcloud's rename/move has already completed on disk by the time this
+		// runs - there is no old.txt left to `git mv` from.
+		rename($this->tmpRepoPath . '/old.txt', $this->tmpRepoPath . '/new.txt');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$previousSnapshot = new Snapshot();
+		$previousSnapshot->setId(9);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 42)->willReturn($previousSnapshot);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(function (Snapshot $snapshot): bool {
+				return $snapshot->getUserId() === 'testuser'
+					&& $snapshot->getFilePath() === 'new.txt'
+					&& $snapshot->getParentSnapshotId() === 9
+					&& $snapshot->getStatus() === 'committed'
+					&& $snapshot->getFileId() === 42;
+			}))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitRename($this->tmpRepoPath, 'old.txt', 'new.txt', 42, 'testuser');
+
+		$this->assertTrue($result['success']);
+
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' log -1 --pretty=%s', $logOutput);
+		$this->assertSame('Auto-commit: renamed old.txt to new.txt', $logOutput[0]);
+	}
+
+	public function testAutoCommitRenameFailsWhenRepositoryNotInitialized(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('insert');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitRename($this->tmpRepoPath, 'old.txt', 'new.txt', 42, 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
+
+	public function testResolveRepositoryPathReturnsFalseForNonLocalStorage(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(false);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$this->assertFalse($service->resolveRepositoryPath($userFolder));
+	}
+
+	public function testResolveRepositoryPathReturnsLocalFilePathForLocalStorage(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$this->assertSame('/data/testuser/files', $service->resolveRepositoryPath($userFolder));
 	}
 }

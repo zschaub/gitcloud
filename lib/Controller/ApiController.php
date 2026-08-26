@@ -311,7 +311,10 @@ class ApiController extends OCSController {
 	 * list. A subfolder (not the repository root) that already has at least one
 	 * committed file also surfaces any other files sitting in it that have never
 	 * been committed, tagged 'Uncommitted', so newly added files aren't invisible
-	 * until a user manually commits them.
+	 * until a user manually commits them. A committed file that no longer exists
+	 * because it was deleted outside GitCloud (and auto-committed as such, see
+	 * GitTrackedNodeDeletedListener) is kept in the list tagged 'Deleted' instead
+	 * of being silently dropped, so its history stays reachable/restorable.
 	 *
 	 * @return DataResponse<Http::STATUS_OK, array{status: string, directories: list<array{path: string, files: list<array{path: string, status: string}>}>}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
@@ -342,6 +345,11 @@ class ApiController extends OCSController {
 			// what's still actually on disk or it'll show ghost entries.
 			$existingFiles = $this->filterExistingFiles($userFolder, $directory['files']);
 
+			// A committed path that no longer exists but was auto-committed as a
+			// deletion (see GitTrackedNodeDeletedListener) is kept, not dropped,
+			// so its history stays reachable/restorable via the dashboard.
+			$deletedFiles = $this->findDeletedFiles($userId, $directory['files'], $existingFiles);
+
 			// The repository root ("/") is excluded: it groups files purely because
 			// they sit at the top level of the user's whole Nextcloud storage, not
 			// because that folder was deliberately tracked, so listing "new files in
@@ -350,7 +358,7 @@ class ApiController extends OCSController {
 				? []
 				: $this->findUncommittedFiles($userFolder, $directory['path'], $directory['files']);
 
-			if ($existingFiles === [] && $uncommittedFiles === []) {
+			if ($existingFiles === [] && $uncommittedFiles === [] && $deletedFiles === []) {
 				continue;
 			}
 
@@ -358,6 +366,7 @@ class ApiController extends OCSController {
 				'path' => $directory['path'],
 				'files' => $existingFiles,
 				'uncommittedFiles' => $uncommittedFiles,
+				'deletedFiles' => $deletedFiles,
 			];
 			array_push($allExistingFiles, ...$existingFiles);
 		}
@@ -378,6 +387,10 @@ class ApiController extends OCSController {
 					array_map(
 						static fn (string $filePath): array => ['path' => $filePath, 'status' => 'Uncommitted'],
 						$directory['uncommittedFiles'],
+					),
+					array_map(
+						static fn (string $filePath): array => ['path' => $filePath, 'status' => 'Deleted'],
+						$directory['deletedFiles'],
 					),
 				),
 			],
@@ -423,7 +436,20 @@ class ApiController extends OCSController {
 
 		try {
 			$node = $userFolder->get($filePath);
+			$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
 		} catch (NotFoundException) {
+			// The file may have been deleted or renamed outside GitCloud; its
+			// recorded history is still reachable by its last known path, which
+			// is exactly what $filePath already is in that case (the dashboard
+			// only ever passes a path it got back from a prior /directories call).
+			$node = null;
+			$relativePath = ltrim($filePath, '/');
+		}
+
+		$userId = $this->userSession->getUser()->getUID();
+		$snapshots = $this->vcsService->getSnapshotsForFile($userId, $relativePath);
+
+		if ($node === null && $snapshots === []) {
 			return new DataResponse(
 				[
 					'status' => 'error',
@@ -432,10 +458,6 @@ class ApiController extends OCSController {
 				Http::STATUS_BAD_REQUEST,
 			);
 		}
-
-		$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
-
-		$snapshots = $this->vcsService->getSnapshotsForFile($this->userSession->getUser()->getUID(), $relativePath);
 
 		return new DataResponse(
 			[
@@ -490,16 +512,14 @@ class ApiController extends OCSController {
 		try {
 			$node = $userFolder->get($filePath);
 		} catch (NotFoundException) {
-			return new DataResponse(
-				[
-					'status' => 'error',
-					'message' => sprintf('File not found: %s', $filePath),
-				],
-				Http::STATUS_BAD_REQUEST,
-			);
+			// The file may have been deleted outside GitCloud; VcsService::rollbackToSnapshot()
+			// only needs a path string + repo path (not a live node) and authorizes the
+			// request itself via the snapshot's own owner/path, so `git checkout` can still
+			// recreate the file on disk from history even though there's nothing to resolve here.
+			$node = null;
 		}
 
-		if (!$node->getStorage()->isLocal()) {
+		if ($node !== null && !$node->getStorage()->isLocal()) {
 			return new DataResponse(
 				[
 					'status' => 'error',
@@ -509,7 +529,9 @@ class ApiController extends OCSController {
 			);
 		}
 
-		$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
+		$relativePath = $node !== null
+			? ltrim($userFolder->getRelativePath($node->getPath()), '/')
+			: ltrim($filePath, '/');
 
 		$result = $this->vcsService->rollbackToSnapshot(
 			$repositoryPath,
@@ -525,7 +547,14 @@ class ApiController extends OCSController {
 			// changes via WebDAV, so without this they won't see the rolled-back content.
 			// This mirrors how DAV's own PUT handler (apps/dav/lib/Connector/Sabre/File.php)
 			// resyncs the cache after writing file content outside the Node/View write path.
-			$node->getStorage()->getUpdater()->update($node->getInternalPath());
+			if ($node !== null) {
+				$node->getStorage()->getUpdater()->update($node->getInternalPath());
+			} else {
+				// There was no node before the rollback (the file had been deleted);
+				// git checkout just recreated it on disk, so resync via the user
+				// folder's storage/updater instead of a per-node one.
+				$userFolder->getStorage()->getUpdater()->update($userFolder->getInternalPath() . '/' . $relativePath);
+			}
 		}
 
 		return new DataResponse(
@@ -538,11 +567,12 @@ class ApiController extends OCSController {
 	}
 
 	/**
-	 * Resolves $node to the repository-relative path(s) of the file(s) it represents.
-	 * A folder's own path can't be committed as-is (git has no notion of committing a bare
-	 * directory, and recording a snapshot for the folder path itself hides every file inside
-	 * it from the directories/snapshots API), so folders are expanded recursively into their
-	 * contained files instead.
+	 * Resolves $node to the repository-relative path(s) of the file(s) it represents,
+	 * each paired with its Nextcloud fileid (used to link commit history across a later
+	 * rename/move/delete). A folder's own path can't be committed as-is (git has no
+	 * notion of committing a bare directory, and recording a snapshot for the folder
+	 * path itself hides every file inside it from the directories/snapshots API), so
+	 * folders are expanded recursively into their contained files instead.
 	 *
 	 * Each leaf file's size is checked against $maxFileSizeBytes: in "block" mode an
 	 * oversized file throws FileTooLargeException (aborting the whole commit, matching
@@ -550,7 +580,7 @@ class ApiController extends OCSController {
 	 * path is appended to $warnings instead and the file is still committed.
 	 *
 	 * @param string[] $warnings
-	 * @return string[]
+	 * @return list<array{path: string, fileId: int}>
 	 * @throws FileTooLargeException
 	 */
 	private function collectRelativeFilePaths(
@@ -575,7 +605,7 @@ class ApiController extends OCSController {
 				}
 			}
 
-			return [$relativePath];
+			return [['path' => $relativePath, 'fileId' => $node->getId()]];
 		}
 
 		$relativePaths = [];
@@ -613,6 +643,36 @@ class ApiController extends OCSController {
 			$filePaths,
 			static fn (string $filePath): bool => $userFolder->nodeExists($filePath),
 		));
+	}
+
+	/**
+	 * Of the committed paths that no longer exist on disk (i.e. everything in
+	 * $filePaths not already in $existingFiles), returns those whose most recent
+	 * snapshot is status 'deleted' - meaning GitCloud itself recorded the deletion
+	 * (see GitTrackedNodeDeletedListener) rather than the path merely being stale/
+	 * unlinked for some other reason, in which case the safer default is to keep
+	 * dropping it as today.
+	 *
+	 * @param string[] $filePaths
+	 * @param string[] $existingFiles
+	 * @return string[]
+	 */
+	private function findDeletedFiles(string $userId, array $filePaths, array $existingFiles): array {
+		$existingFileSet = array_flip($existingFiles);
+
+		$deletedFiles = [];
+		foreach ($filePaths as $filePath) {
+			if (isset($existingFileSet[$filePath])) {
+				continue;
+			}
+
+			$snapshots = $this->vcsService->getSnapshotsForFile($userId, $filePath);
+			if (isset($snapshots[0]) && $snapshots[0]->getStatus() === 'deleted') {
+				$deletedFiles[] = $filePath;
+			}
+		}
+
+		return $deletedFiles;
 	}
 
 	/**

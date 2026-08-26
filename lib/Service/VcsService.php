@@ -8,6 +8,7 @@ use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Db\SnapshotMapper;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\Files\Folder;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -30,13 +31,14 @@ class VcsService {
 	 * Stages the given files and commits them in the Git repository rooted at $repositoryPath.
 	 * Initializes the repository if it does not already exist.
 	 * @param string $repositoryPath Absolute local filesystem path to the repository's working tree.
-	 * @param string[] $relativeFilePaths List of file paths, relative to $repositoryPath, to stage.
+	 * @param list<array{path: string, fileId: int}> $relativeFiles Files, relative to $repositoryPath, to stage,
+	 *                                                              each paired with its Nextcloud fileid.
 	 * @param string $message The commit message provided by the user.
 	 * @param string $userId The UID of the user performing the commit, used to record snapshot rows.
 	 * @return array{success: bool, message: string}
 	 */
-	public function commitChanges(string $repositoryPath, array $relativeFilePaths, string $message, string $userId): array {
-		if (empty($relativeFilePaths)) {
+	public function commitChanges(string $repositoryPath, array $relativeFiles, string $message, string $userId): array {
+		if (empty($relativeFiles)) {
 			$this->logger->warning('Attempted to commit with no files selected.');
 			return ['success' => false, 'message' => 'No files selected for commitment.'];
 		}
@@ -54,6 +56,8 @@ class VcsService {
 		if (!$initResult['success']) {
 			return $initResult;
 		}
+
+		$relativeFilePaths = array_column($relativeFiles, 'path');
 
 		$addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $relativeFilePaths));
 		if (!$addResult['success']) {
@@ -78,17 +82,128 @@ class VcsService {
 		}
 		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
 
-		foreach ($relativeFilePaths as $filePath) {
-			$previousSnapshots = $this->getSnapshotsForFile($userId, $filePath);
-			$parentSnapshotId = isset($previousSnapshots[0]) ? $previousSnapshots[0]->getId() : null;
-			$this->createSnapshotRecord($userId, $filePath, $commitHash, $message, $parentSnapshotId, 'committed');
+		foreach ($relativeFiles as $file) {
+			// Chained by fileid, not path, so a file deleted and later recreated at
+			// the same path (a different fileid) correctly starts a fresh history
+			// chain instead of being misattributed as a continuation of the old one.
+			$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $file['fileId']);
+			$parentSnapshotId = $parentSnapshot?->getId();
+			$this->createSnapshotRecord($userId, $file['path'], $commitHash, $message, $parentSnapshotId, 'committed', $file['fileId']);
 		}
 
-		$this->logger->info(sprintf('Committed %d file(s) with message: "%s"', count($relativeFilePaths), $message));
+		$this->logger->info(sprintf('Committed %d file(s) with message: "%s"', count($relativeFiles), $message));
 		return [
 			'success' => true,
 			'message' => 'Successfully staged and committed changes.',
 		];
+	}
+
+	/**
+	 * Reacts to a GitCloud-tracked file being deleted outside GitCloud (Files app,
+	 * WebDAV, sync clients, etc.) by staging its removal and auto-committing it
+	 * immediately, so the repository and dashboard stay in sync with reality
+	 * instead of waiting for the user's next manual commit.
+	 * @return array{success: bool, message: string}
+	 */
+	public function autoCommitDelete(string $repositoryPath, string $relativeFilePath, int $fileId, string $userId): array {
+		if (!is_dir($repositoryPath) || !is_dir($repositoryPath . '/.git')) {
+			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
+		}
+
+		// The path is already missing from the working tree (Nextcloud already
+		// deleted it), so `git add` on it stages the deletion exactly like `git rm`
+		// would - the same staging idiom used everywhere else in this class.
+		$addResult = $this->runGit($repositoryPath, ['add', '--', $relativeFilePath]);
+		if (!$addResult['success']) {
+			$this->logger->warning(sprintf('git add failed while auto-committing a delete: %s', $addResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to stage deletion: %s', $addResult['output'])];
+		}
+
+		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+		if ($stagedDiffResult['success']) {
+			return ['success' => false, 'message' => 'Nothing to auto-commit for the deleted file.'];
+		}
+
+		$message = sprintf('Auto-commit: deleted %s', $relativeFilePath);
+		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+		if (!$commitResult['success']) {
+			$this->logger->info(sprintf('git commit did not succeed while auto-committing a delete: %s', $commitResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to auto-commit deletion: %s', $commitResult['output'])];
+		}
+
+		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
+		if (!$headResult['success']) {
+			$this->logger->warning(sprintf('git rev-parse HEAD failed after auto-committing a delete: %s', $headResult['output']));
+		}
+		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
+
+		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
+		$parentSnapshotId = $parentSnapshot?->getId();
+		$this->createSnapshotRecord($userId, $relativeFilePath, $commitHash, $message, $parentSnapshotId, 'deleted', $fileId);
+
+		$this->logger->info(sprintf('Auto-committed deletion of %s', $relativeFilePath));
+		return ['success' => true, 'message' => sprintf('Auto-committed deletion of %s.', $relativeFilePath)];
+	}
+
+	/**
+	 * Reacts to a GitCloud-tracked file being renamed or moved outside GitCloud by
+	 * staging both the now-missing old path and the new path and auto-committing
+	 * immediately. Nextcloud's rename/move has already completed on disk by the time
+	 * this runs, so a literal `git mv` can't operate on the old location anymore;
+	 * staging both paths together lets git's own similarity-based rename detection
+	 * record it as a rename in the commit, which is the correct git-native equivalent.
+	 * @return array{success: bool, message: string}
+	 */
+	public function autoCommitRename(string $repositoryPath, string $oldRelativePath, string $newRelativePath, int $fileId, string $userId): array {
+		if (!is_dir($repositoryPath) || !is_dir($repositoryPath . '/.git')) {
+			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
+		}
+
+		$addResult = $this->runGit($repositoryPath, ['add', '--', $oldRelativePath, $newRelativePath]);
+		if (!$addResult['success']) {
+			$this->logger->warning(sprintf('git add failed while auto-committing a rename: %s', $addResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to stage rename: %s', $addResult['output'])];
+		}
+
+		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+		if ($stagedDiffResult['success']) {
+			return ['success' => false, 'message' => 'Nothing to auto-commit for the renamed file.'];
+		}
+
+		$message = sprintf('Auto-commit: renamed %s to %s', $oldRelativePath, $newRelativePath);
+		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+		if (!$commitResult['success']) {
+			$this->logger->info(sprintf('git commit did not succeed while auto-committing a rename: %s', $commitResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to auto-commit rename: %s', $commitResult['output'])];
+		}
+
+		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
+		if (!$headResult['success']) {
+			$this->logger->warning(sprintf('git rev-parse HEAD failed after auto-committing a rename: %s', $headResult['output']));
+		}
+		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
+
+		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
+		$parentSnapshotId = $parentSnapshot?->getId();
+		$this->createSnapshotRecord($userId, $newRelativePath, $commitHash, $message, $parentSnapshotId, 'committed', $fileId);
+
+		$this->logger->info(sprintf('Auto-committed rename of %s to %s', $oldRelativePath, $newRelativePath));
+		return ['success' => true, 'message' => sprintf('Auto-committed rename of %s to %s.', $oldRelativePath, $newRelativePath)];
+	}
+
+	/**
+	 * Resolves the local filesystem path backing $userFolder, or false if it isn't on
+	 * local storage or the path can't be resolved. Shared by ApiController (which wraps
+	 * the false case in an error DataResponse) and the Node-event listeners (which have
+	 * no request/response cycle to return one).
+	 */
+	public function resolveRepositoryPath(Folder $userFolder): string|false {
+		$storage = $userFolder->getStorage();
+		if (!$storage->isLocal()) {
+			return false;
+		}
+
+		return $storage->getLocalFile($userFolder->getInternalPath());
 	}
 
 	/**
@@ -386,7 +501,11 @@ class VcsService {
 
 		$previousSnapshots = $this->getSnapshotsForFile($userId, $relativeFilePath);
 		$parentSnapshotId = isset($previousSnapshots[0]) ? $previousSnapshots[0]->getId() : null;
-		$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshotId, 'rolled_back');
+		// Carries the fileid of the snapshot being restored forward onto the new
+		// row. This also correctly handles rolling back an already-deleted file
+		// (no live Node to source a fileid from), and its non-'deleted' status
+		// is what clears a prior 'Deleted' dashboard state, with no special-casing.
+		$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshotId, 'rolled_back', $snapshot->getFileId());
 
 		$this->logger->info(sprintf('Rolled back %s to snapshot #%d', $relativeFilePath, $snapshotId));
 		return [
@@ -396,7 +515,7 @@ class VcsService {
 	}
 
 	/**
-	 * Records a new snapshot row for a committed or rolled-back file state.
+	 * Records a new snapshot row for a committed, rolled-back, or deleted file state.
 	 */
 	public function createSnapshotRecord(
 		string $userId,
@@ -405,6 +524,7 @@ class VcsService {
 		string $message,
 		?int $parentSnapshotId,
 		string $status,
+		?int $fileId = null,
 	): Snapshot {
 		$snapshot = new Snapshot();
 		$snapshot->setUserId($userId);
@@ -413,6 +533,7 @@ class VcsService {
 		$snapshot->setMessage($message);
 		$snapshot->setParentSnapshotId($parentSnapshotId);
 		$snapshot->setStatus($status);
+		$snapshot->setFileId($fileId);
 		$snapshot->setCreatedAt($this->timeFactory->getTime());
 
 		return $this->snapshotMapper->insert($snapshot);

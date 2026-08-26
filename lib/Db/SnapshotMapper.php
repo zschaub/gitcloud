@@ -64,6 +64,40 @@ class SnapshotMapper extends QBMapper {
 	}
 
 	/**
+	 * @return Snapshot[]
+	 */
+	public function findAllForFileId(string $userId, int $fileId): array {
+		$qb = $this->db->getQueryBuilder();
+
+		$select = $qb
+			->select('*')
+			->from($this->getTableName())
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, $qb::PARAM_INT)))
+			->orderBy('created_at', 'DESC');
+
+		return $this->findEntities($select);
+	}
+
+	public function findLatestForFileId(string $userId, int $fileId): ?Snapshot {
+		$qb = $this->db->getQueryBuilder();
+
+		$select = $qb
+			->select('*')
+			->from($this->getTableName())
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, $qb::PARAM_INT)))
+			->orderBy('created_at', 'DESC')
+			->setMaxResults(1);
+
+		try {
+			return $this->findEntity($select);
+		} catch (DoesNotExistException $e) {
+			return null;
+		}
+	}
+
+	/**
 	 * Permanently deletes every snapshot row for the given user, used when the
 	 * user wipes their Git history (their commit hashes become invalid afterward).
 	 */
