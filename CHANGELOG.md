@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-26
+
+### Fixed
+
+- Widened 0.2.1's git-not-installed fix to cover `proc_open()` failing for any other reason (a `cwd` that no longer exists, hitting a process/resource limit, permission issues, ...) — the second Phase 3 item, "surface real git error output instead of a generic failure message." `VcsService::runGit`/`runGitConfigGet`/`runGitConfigSet` previously fell back to a hardcoded `'Unable to start the git process.'` (or, in the two config methods, a silently empty `''`) whenever `proc_open()` itself failed to start, discarding the real reason PHP already knew. All three now call `error_clear_last()` immediately before their `@proc_open()` call (the `@` intentional — the failure is now deliberately captured via `error_get_last()` rather than left to leak as a raw PHP warning) and, on failure, return a new shared `describeProcOpenFailure()`'s message — `'Unable to start the git process: <the real reason>'` — which flows through the same existing message-propagation path used by 0.2.1's fix (every caller already forwards `runGit`'s `output`/`message` straight to the API response and on to the dashboard UI, so no other code needed to change).
+
+Covered by a new `VcsServiceTest::testRunGitSurfacesRealReasonWhenProcOpenFailsForReasonsOtherThanMissingGit`, which triggers a real `proc_open()` failure (a nonexistent `cwd`, distinct from 0.2.1's missing-binary case) and asserts the real underlying reason is included rather than just the generic prefix. Full PHPUnit suite (91 tests, up from 90, 209 assertions) verified passing inside the running `stable34` container (synced via `docker cp` + a container restart first); `composer lint` and `composer cs:check` also verified.
+
 ## [0.2.1] - 2026-08-26
 
 ### Added

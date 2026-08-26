@@ -54,6 +54,18 @@ class VcsService {
 	}
 
 	/**
+	 * Builds a real error message for a failed proc_open() call (e.g. resource limits,
+	 * a cwd that vanished mid-request, permission issues) from PHP's own last-error
+	 * state, instead of a generic "something went wrong" placeholder. Callers must
+	 * call error_clear_last() immediately before their proc_open() so this reflects
+	 * that call's own failure and not a stale, unrelated warning.
+	 */
+	private function describeProcOpenFailure(): string {
+		$lastError = error_get_last();
+		return sprintf('Unable to start the git process: %s', $lastError['message'] ?? 'unknown error');
+	}
+
+	/**
 	 * Stages the given files and commits them in the Git repository rooted at $repositoryPath.
 	 * Initializes the repository if it does not already exist.
 	 * @param string $repositoryPath Absolute local filesystem path to the repository's working tree.
@@ -348,7 +360,10 @@ class VcsService {
 			}
 		}
 
-		$process = proc_open(
+		// Suppressed: a failure here is deliberately captured via error_get_last()
+		// in describeProcOpenFailure() below rather than left to PHP's own warning.
+		error_clear_last();
+		$process = @proc_open(
 			array_merge(['git'], $args),
 			[
 				1 => ['pipe', 'w'],
@@ -359,7 +374,7 @@ class VcsService {
 		);
 
 		if (!is_resource($process)) {
-			return ['success' => false, 'output' => 'Unable to start the git process.'];
+			return ['success' => false, 'output' => $this->describeProcOpenFailure()];
 		}
 
 		$stdout = stream_get_contents($pipes[1]);
@@ -382,7 +397,10 @@ class VcsService {
 	 * Runs a git config get command directly via proc_open (used during identity setup).
 	 */
 	public function runGitConfigGet(string $key, string $cwd): array {
-		$process = proc_open(
+		// Suppressed: a failure here is deliberately captured via error_get_last()
+		// in describeProcOpenFailure() below rather than left to PHP's own warning.
+		error_clear_last();
+		$process = @proc_open(
 			array_merge(['git', 'config', '--get', $key]),
 			[
 				1 => ['pipe', 'w'],
@@ -393,7 +411,7 @@ class VcsService {
 		);
 
 		if (!is_resource($process)) {
-			return ['success' => false, 'output' => ''];
+			return ['success' => false, 'output' => $this->describeProcOpenFailure()];
 		}
 
 		$stdout = stream_get_contents($pipes[1]);
@@ -409,7 +427,10 @@ class VcsService {
 	 * Runs a git config set command directly via proc_open (used during identity setup).
 	 */
 	public function runGitConfigSet(string $key, string $value, string $cwd): array {
-		$process = proc_open(
+		// Suppressed: a failure here is deliberately captured via error_get_last()
+		// in describeProcOpenFailure() below rather than left to PHP's own warning.
+		error_clear_last();
+		$process = @proc_open(
 			array_merge(['git', 'config', $key, $value]),
 			[
 				1 => ['pipe', 'w'],
@@ -420,7 +441,7 @@ class VcsService {
 		);
 
 		if (!is_resource($process)) {
-			return ['success' => false, 'output' => ''];
+			return ['success' => false, 'output' => $this->describeProcOpenFailure()];
 		}
 
 		$stdout = stream_get_contents($pipes[1]);

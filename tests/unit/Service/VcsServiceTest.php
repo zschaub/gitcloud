@@ -880,4 +880,20 @@ final class VcsServiceTest extends TestCase {
 		$this->assertFalse($result['success']);
 		$this->assertStringContainsString(VcsService::GIT_NOT_INSTALLED_MESSAGE, $result['message']);
 	}
+
+	public function testRunGitSurfacesRealReasonWhenProcOpenFailsForReasonsOtherThanMissingGit(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		// git is present on PATH, but the working directory itself doesn't exist,
+		// so proc_open() fails for a different reason than "git isn't installed".
+		$result = $service->runGit('/nonexistent/gitcloud-test-path-' . uniqid(), ['--version']);
+
+		$this->assertFalse($result['success']);
+		$this->assertStringStartsWith('Unable to start the git process: ', $result['output']);
+		$this->assertNotSame('Unable to start the git process: ', $result['output']);
+	}
 }

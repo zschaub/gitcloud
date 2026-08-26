@@ -62,7 +62,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 - Multi-file / whole-directory rollback to a single point in time — rollback is currently per-file only; restoring several files together to how they looked at a given moment was deliberately scoped out of the original rollback implementation
 - Diff/preview view — show what actually changed before committing or before rolling back; both actions are currently "blind," with no content diff shown anywhere in the UI
 - Ignore-pattern / exclusion support for auto-tracking — once a folder has any committed file, every subsequent change to any file in it is auto-committed, with no way to exclude specific paths or file types
-- Surface real git error output instead of a generic failure message — a broader version of the "Git binary not installed" item above, covering git failures in general
+- ✅ ~~Surface real git error output instead of a generic failure message~~ — done in 0.2.2
 - Snapshot pruning/retention controls — Personal Settings currently only offers a full history wipe; a middle ground (e.g. "prune snapshots older than X" or "keep the last N per file") would help reclaim space without losing everything
 
 *This phase is tentative — we will refine the feature list based on what users actually need.*
