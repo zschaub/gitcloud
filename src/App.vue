@@ -587,12 +587,12 @@ h2 {
 
 .banner--error {
     background-color: color-mix(in srgb, var(--color-error) 15%, transparent);
-    color: var(--color-error);
+    color: var(--color-error-text);
 }
 
 .banner--success {
     background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .stats-grid {
