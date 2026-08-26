@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace OCA\GitCloud\AppInfo;
 
 use OCA\Files\Event\LoadAdditionalScriptsEvent;
+use OCA\Files_Trashbin\Events\NodeRestoredEvent;
 use OCA\GitCloud\Listener\GitTrackedNodeDeletedListener;
 use OCA\GitCloud\Listener\GitTrackedNodeRenamedListener;
+use OCA\GitCloud\Listener\GitTrackedNodeRestoredListener;
 use OCA\GitCloud\Listener\LoadAdditionalScriptsListener;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
@@ -35,6 +37,10 @@ class Application extends App implements IBootstrap {
 		$context->registerEventListener(
 			NodeRenamedEvent::class,
 			GitTrackedNodeRenamedListener::class,
+		);
+		$context->registerEventListener(
+			NodeRestoredEvent::class,
+			GitTrackedNodeRestoredListener::class,
 		);
 	}
 

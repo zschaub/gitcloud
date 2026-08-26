@@ -735,6 +735,71 @@ final class VcsServiceTest extends TestCase {
 		$this->assertFalse($result['success']);
 	}
 
+	public function testAutoCommitRestoreStagesFileAndRecordsCommittedSnapshotClearingDeletedStatus(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' rm -q file1.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Auto-commit: deleted file1.txt"');
+
+		// Nextcloud's trash restore has already put the file back on disk by the
+		// time this runs, but git's index still has it removed from the earlier
+		// delete commit.
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$previousSnapshot = new Snapshot();
+		$previousSnapshot->setId(5);
+		$previousSnapshot->setStatus('deleted');
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 42)->willReturn($previousSnapshot);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(function (Snapshot $snapshot): bool {
+				return $snapshot->getUserId() === 'testuser'
+					&& $snapshot->getFilePath() === 'file1.txt'
+					&& $snapshot->getParentSnapshotId() === 5
+					&& $snapshot->getStatus() === 'committed'
+					&& $snapshot->getFileId() === 42;
+			}))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitRestore($this->tmpRepoPath, 'file1.txt', 42, 'testuser');
+
+		$this->assertTrue($result['success']);
+
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' log -1 --pretty=%s', $logOutput);
+		$this->assertSame('Auto-commit: restored file1.txt', $logOutput[0]);
+	}
+
+	public function testAutoCommitRestoreFailsWhenRepositoryNotInitialized(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('insert');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->autoCommitRestore($this->tmpRepoPath, 'file1.txt', 42, 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
+
 	public function testResolveRepositoryPathReturnsFalseForNonLocalStorage(): void {
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);

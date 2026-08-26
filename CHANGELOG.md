@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.26] - 2026-08-26
+
+### Fixed
+
+- Restoring a tracked-then-deleted file from Nextcloud's trash (Files app "Deleted files") put the file back on disk but left GitCloud's own git repository and dashboard status out of sync: the file's last snapshot stayed `deleted` forever, and git's index still had it removed from the earlier auto-commit, because GitCloud only ever learns about a delete/rename/restore via its Node-event listeners — it never polls. The real-world symptom, reproduced via live testing against the running `stable34` instance and logged in the Phase 3 kanban: any *subsequent* auto-tracked change on a restored file broke, e.g. renaming it threw `git add failed while auto-committing a rename: fatal: pathspec '<old name>' did not match any files`, since `VcsService::autoCommitRename` stages the old path together with the new one and git has nothing at the old path to find. Fixed by adding a new `GitTrackedNodeRestoredListener`, registered (alongside the existing delete/rename listeners) in `Application.php` on `OCA\Files_Trashbin\Events\NodeRestoredEvent` — the typed event Nextcloud's trashbin app dispatches after a successful restore. It gates on the file's last known GitCloud status being `deleted` (skipping untracked files and no-op duplicate dispatches), then calls a new `VcsService::autoCommitRestore`, which re-stages the now-restored file (`git add`), commits it (`Auto-commit: restored <path>`), and records a fresh snapshot with status `committed` — the same convention `rollbackToSnapshot` already uses to clear a prior `Deleted` dashboard state, reused here rather than inventing a new status the frontend wouldn't know how to render.
+
+Covered by new `VcsServiceTest` cases (`testAutoCommitRestoreStagesFileAndRecordsCommittedSnapshotClearingDeletedStatus`, `testAutoCommitRestoreFailsWhenRepositoryNotInitialized`) and a new `GitTrackedNodeRestoredListenerTest` suite (five cases, mirroring the existing rename listener's tests, including one confirming the listener does nothing when GitCloud's last known status for the file *isn't* `deleted`). Full PHPUnit suite (88 tests, up from 78, 200 assertions) verified passing inside the running `stable34` container (synced via `docker cp` + a container restart first, since the bind mount was confirmed lagging again); `composer lint` and `composer cs:check` also verified. Not yet confirmed end-to-end against the real Files-app trash-restore flow (no browser-driven verification per this project's rules) — the user should confirm restoring a deleted file clears its `Deleted` dashboard status and that a subsequent rename/delete on it no longer errors.
+
 ## [0.1.25] - 2026-08-26
 
 ### Fixed

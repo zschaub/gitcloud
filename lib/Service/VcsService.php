@@ -192,6 +192,58 @@ class VcsService {
 	}
 
 	/**
+	 * Reacts to a GitCloud-tracked, GitCloud-deleted file being restored from
+	 * Nextcloud's trash by re-staging it and auto-committing it immediately, so
+	 * the repository's index and the dashboard's Deleted status stay in sync
+	 * with the file actually being back on disk. Without this, the file stays
+	 * missing from git's index indefinitely (GitCloud only ever finds out about
+	 * a delete or restore via these listeners, never by polling), which breaks
+	 * the next auto-tracked change on it - e.g. a subsequent rename fails
+	 * because `autoCommitRename` stages the old path together with the new one,
+	 * and git has nothing at the old path to find.
+	 * @return array{success: bool, message: string}
+	 */
+	public function autoCommitRestore(string $repositoryPath, string $relativeFilePath, int $fileId, string $userId): array {
+		if (!is_dir($repositoryPath) || !is_dir($repositoryPath . '/.git')) {
+			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
+		}
+
+		$addResult = $this->runGit($repositoryPath, ['add', '--', $relativeFilePath]);
+		if (!$addResult['success']) {
+			$this->logger->warning(sprintf('git add failed while auto-committing a restore: %s', $addResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to stage restored file: %s', $addResult['output'])];
+		}
+
+		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+		if ($stagedDiffResult['success']) {
+			return ['success' => false, 'message' => 'Nothing to auto-commit for the restored file.'];
+		}
+
+		$message = sprintf('Auto-commit: restored %s', $relativeFilePath);
+		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+		if (!$commitResult['success']) {
+			$this->logger->info(sprintf('git commit did not succeed while auto-committing a restore: %s', $commitResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to auto-commit restore: %s', $commitResult['output'])];
+		}
+
+		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
+		if (!$headResult['success']) {
+			$this->logger->warning(sprintf('git rev-parse HEAD failed after auto-committing a restore: %s', $headResult['output']));
+		}
+		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
+
+		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
+		$parentSnapshotId = $parentSnapshot?->getId();
+		// Status 'committed', not 'deleted' - this is what clears the file's prior
+		// Deleted dashboard state, the same convention rollbackToSnapshot already
+		// uses to clear it when a user explicitly rolls back a deleted file.
+		$this->createSnapshotRecord($userId, $relativeFilePath, $commitHash, $message, $parentSnapshotId, 'committed', $fileId);
+
+		$this->logger->info(sprintf('Auto-committed restore of %s', $relativeFilePath));
+		return ['success' => true, 'message' => sprintf('Auto-committed restore of %s.', $relativeFilePath)];
+	}
+
+	/**
 	 * Resolves the local filesystem path backing $userFolder, or false if it isn't on
 	 * local storage or the path can't be resolved. Shared by ApiController (which wraps
 	 * the false case in an error DataResponse) and the Node-event listeners (which have
