@@ -20,11 +20,37 @@ class VcsService {
 	private LoggerInterface $logger;
 	private SnapshotMapper $snapshotMapper;
 	private ITimeFactory $timeFactory;
+	private ?bool $gitAvailable = null;
+
+	public const GIT_NOT_INSTALLED_MESSAGE = 'git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.';
 
 	public function __construct(LoggerInterface $logger, SnapshotMapper $snapshotMapper, ITimeFactory $timeFactory) {
 		$this->logger = $logger;
 		$this->snapshotMapper = $snapshotMapper;
 		$this->timeFactory = $timeFactory;
+	}
+
+	/**
+	 * Checks, without shelling out, whether a "git" executable exists anywhere on the
+	 * current PATH. Cached per-instance since VcsService is constructed fresh per request.
+	 */
+	private function isGitAvailable(): bool {
+		if ($this->gitAvailable !== null) {
+			return $this->gitAvailable;
+		}
+
+		$pathEnv = getenv('PATH');
+		if ($pathEnv === false || $pathEnv === '') {
+			return $this->gitAvailable = false;
+		}
+
+		foreach (explode(PATH_SEPARATOR, $pathEnv) as $dir) {
+			if ($dir !== '' && is_executable($dir . '/git')) {
+				return $this->gitAvailable = true;
+			}
+		}
+
+		return $this->gitAvailable = false;
 	}
 
 	/**
@@ -281,6 +307,11 @@ class VcsService {
 	 * @return array{success: bool, output: string}
 	 */
 	public function runGit(string $cwd, array $args): array {
+		if (!$this->isGitAvailable()) {
+			$this->logger->error('Cannot run git command: ' . self::GIT_NOT_INSTALLED_MESSAGE);
+			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
+		}
+
 		// Git requires user identity (name/email) to be set before creating a commit.
 		// If not configured, try to configure it using system git config defaults.
 		// Only commands that actually author a commit need this, so read-only

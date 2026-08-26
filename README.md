@@ -7,7 +7,7 @@
 
 ## Requirements
 
-- **The `git` binary must be installed and on the `PATH` of the user running PHP** (e.g. `www-data`/php-fpm) on the Nextcloud server. GitCloud has no bundled git and no PHP git library — every operation (`VcsService::runGit`/`runGitConfigGet`/`runGitConfigSet`) shells out directly to the `git` executable via `proc_open`. If `git` isn't installed, commit/rollback/status requests will fail with a generic error rather than a clear "git is not installed" message.
+- **The `git` binary must be installed and on the `PATH` of the user running PHP** (e.g. `www-data`/php-fpm) on the Nextcloud server. GitCloud has no bundled git and no PHP git library — every operation (`VcsService::runGit`/`runGitConfigGet`/`runGitConfigSet`) shells out directly to the `git` executable via `proc_open`. If `git` isn't installed, commit/rollback/status requests fail with a clear "git is not installed on this server" message rather than a generic error.
 
 ## Usage
 
@@ -58,7 +58,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 - Manage branches visually
 - Delete commits (a targeted removal of individual commits from history — distinct from the existing Personal Settings option to wipe a user's *entire* GitCloud history at once)
 - Remove specific files / folders from GitCloud (stop tracking a file without deleting it from disk)
-- Git binary not installed error message (today a missing `git` binary surfaces as a generic failure rather than a clear message; see the note in Requirements)
+- ✅ ~~Git binary not installed error message~~ — done in 0.2.1, see the note in Requirements
 - Multi-file / whole-directory rollback to a single point in time — rollback is currently per-file only; restoring several files together to how they looked at a given moment was deliberately scoped out of the original rollback implementation
 - Diff/preview view — show what actually changed before committing or before rolling back; both actions are currently "blind," with no content diff shown anywhere in the UI
 - Ignore-pattern / exclusion support for auto-tracking — once a folder has any committed file, every subsequent change to any file in it is auto-committed, with no way to exclude specific paths or file types

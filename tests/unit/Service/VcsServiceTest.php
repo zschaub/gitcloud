@@ -833,4 +833,51 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertSame('/data/testuser/files', $service->resolveRepositoryPath($userFolder));
 	}
+
+	public function testRunGitReturnsClearErrorWhenGitBinaryNotOnPath(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$logger->expects($this->once())->method('error');
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$originalPath = getenv('PATH');
+		putenv('PATH=' . sys_get_temp_dir());
+		try {
+			$result = $service->runGit($this->tmpRepoPath, ['init']);
+		} finally {
+			putenv($originalPath === false ? 'PATH' : 'PATH=' . $originalPath);
+		}
+
+		$this->assertFalse($result['success']);
+		$this->assertSame(VcsService::GIT_NOT_INSTALLED_MESSAGE, $result['output']);
+	}
+
+	public function testCommitChangesFailsWithClearErrorWhenGitBinaryNotOnPath(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('insert');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$originalPath = getenv('PATH');
+		putenv('PATH=' . sys_get_temp_dir());
+		try {
+			$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 42]], 'Initial commit', 'testuser');
+		} finally {
+			putenv($originalPath === false ? 'PATH' : 'PATH=' . $originalPath);
+		}
+
+		$this->assertFalse($result['success']);
+		$this->assertStringContainsString(VcsService::GIT_NOT_INSTALLED_MESSAGE, $result['message']);
+	}
 }

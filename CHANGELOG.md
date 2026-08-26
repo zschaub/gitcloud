@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-26
+
+### Added
+
+- A missing `git` binary on the server now surfaces as a clear error ("git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.") instead of a generic failure — the first Phase 3 item. `VcsService::runGit` (the single entry point every other git-invoking method funnels through, including the `runGitConfigGet`/`runGitConfigSet` identity-setup calls made from within it) now checks for a `git` executable on `$PATH` before calling `proc_open`, via a new private `isGitAvailable()` that scans `PATH` directories directly (no shelling out, so it can't itself fail for the same reason it's checking) and caches the result on the service instance for the rest of the request. Every caller (`commitChanges`, `rollbackToSnapshot`, `autoCommitDelete`/`autoCommitRename`/`autoCommitRestore`, `ensureRepository`, status/history methods) already propagates `runGit`'s `message`/`output` straight through to its own response, so no other code changed — the clear message reaches `ApiController`'s JSON response and the dashboard UI unmodified.
+
+Covered by two new `VcsServiceTest` cases (`testRunGitReturnsClearErrorWhenGitBinaryNotOnPath`, `testCommitChangesFailsWithClearErrorWhenGitBinaryNotOnPath`), both simulating a missing binary by temporarily pointing `PATH` at a directory with no `git` executable. Full PHPUnit suite (90 tests, up from 88, 206 assertions) verified passing inside the running `stable34` container (synced via `docker cp` + a container restart first); `composer lint` and `composer cs:check` also verified.
+
 ## [0.2.0] - 2026-08-26
 
 ### Changed
