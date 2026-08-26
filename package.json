@@ -6,8 +6,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite --mode development build",
-    "lint": "eslint src",
-    "stylelint": "stylelint src/**/*.vue src/**/*.scss src/**/*.css",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src",
+    "stylelint": "stylelint \"src/**/*.vue\" \"src/**/*.scss\" \"src/**/*.css\"",
     "watch": "vite --mode development build --watch"
   },
   "browserslist": [

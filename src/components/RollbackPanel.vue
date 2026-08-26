@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import NcDialog from "@nextcloud/vue/components/NcDialog";
-import NcButton from "@nextcloud/vue/components/NcButton";
-import NcLoadingIcon from "@nextcloud/vue/components/NcLoadingIcon";
-import CloseIcon from "@mdi/svg/svg/close.svg?raw";
-import { ref, computed, watch } from "vue";
-import axios from "@nextcloud/axios";
-import { generateOcsUrl } from "@nextcloud/router";
+import NcDialog from '@nextcloud/vue/components/NcDialog'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
+import CloseIcon from '@mdi/svg/svg/close.svg?raw'
+import { ref, computed, watch } from 'vue'
+import axios from '@nextcloud/axios'
+import { generateOcsUrl } from '@nextcloud/router'
 
 const props = defineProps<{
     open: boolean;
     filePath: string | null;
-}>();
+}>()
 
 const emit = defineEmits<{
-    "update:open": [value: boolean];
-    "rolled-back": [];
-}>();
+    'update:open': [value: boolean];
+    rolledBack: [];
+}>()
 
 interface Snapshot {
     id: number;
@@ -26,210 +26,211 @@ interface Snapshot {
     parentSnapshotId: number | null;
 }
 
-const snapshots = ref<Snapshot[]>([]);
-const loadError = ref("");
-const isLoading = ref(false);
+const snapshots = ref<Snapshot[]>([])
+const loadError = ref('')
+const isLoading = ref(false)
 
-const rollbackStatus = ref<null | "success" | "error">(null);
-const rollbackResultMessage = ref("");
+const rollbackStatus = ref<null | 'success' | 'error'>(null)
+const rollbackResultMessage = ref('')
 
-const confirmSnapshot = ref<Snapshot | null>(null);
-const isRollingBack = ref(false);
+const confirmSnapshot = ref<Snapshot | null>(null)
+const isRollingBack = ref(false)
 
 function fileName(path: string): string {
-    return path.split("/").pop() ?? path;
+	return path.split('/').pop() ?? path
 }
 
 function extractErrorMessage(error: unknown, fallback: string): string {
-    const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } };
-    return axiosError.response?.data?.ocs?.data?.message ?? fallback;
+	const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
+	return axiosError.response?.data?.ocs?.data?.message ?? fallback
 }
 
 async function loadSnapshots() {
-    if (!props.filePath) return;
-    isLoading.value = true;
-    loadError.value = "";
-    try {
-        const response = await axios.get(generateOcsUrl("apps/gitcloud/snapshots"), {
-            params: { filePath: props.filePath },
-        });
-        snapshots.value = response.data.ocs.data.snapshots;
-    } catch (error) {
-        loadError.value = extractErrorMessage(error, "Failed to load snapshots for the selected file.");
-    } finally {
-        isLoading.value = false;
-    }
+	if (!props.filePath) return
+	isLoading.value = true
+	loadError.value = ''
+	try {
+		const response = await axios.get(generateOcsUrl('apps/gitcloud/snapshots'), {
+			params: { filePath: props.filePath },
+		})
+		snapshots.value = response.data.ocs.data.snapshots
+	} catch (error) {
+		loadError.value = extractErrorMessage(error, 'Failed to load snapshots for the selected file.')
+	} finally {
+		isLoading.value = false
+	}
 }
 
 watch(
-    () => [props.open, props.filePath],
-    ([isOpen]) => {
-        if (isOpen) {
-            snapshots.value = [];
-            loadError.value = "";
-            rollbackStatus.value = null;
-            rollbackResultMessage.value = "";
-            confirmSnapshot.value = null;
-            loadSnapshots();
-        }
-    },
-);
+	() => [props.open, props.filePath],
+	([isOpen]) => {
+		if (isOpen) {
+			snapshots.value = []
+			loadError.value = ''
+			rollbackStatus.value = null
+			rollbackResultMessage.value = ''
+			confirmSnapshot.value = null
+			loadSnapshots()
+		}
+	},
+)
 
 function formatRelative(unixSeconds: number): string {
-    const diffMs = Date.now() - unixSeconds * 1000;
-    const minutes = Math.floor(diffMs / 60000);
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    if (days < 30) return `${days}d ago`;
-    return `${Math.floor(days / 30)}mo ago`;
+	const diffMs = Date.now() - unixSeconds * 1000
+	const minutes = Math.floor(diffMs / 60000)
+	if (minutes < 1) return 'just now'
+	if (minutes < 60) return `${minutes}m ago`
+	const hours = Math.floor(minutes / 60)
+	if (hours < 24) return `${hours}h ago`
+	const days = Math.floor(hours / 24)
+	if (days < 30) return `${days}d ago`
+	return `${Math.floor(days / 30)}mo ago`
 }
 
 function formatAbsolute(unixSeconds: number): string {
-    return new Date(unixSeconds * 1000).toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-    });
+	return new Date(unixSeconds * 1000).toLocaleString(undefined, {
+		month: 'short',
+		day: 'numeric',
+		year: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit',
+	})
 }
 
 function requestRollback(snapshot: Snapshot) {
-    confirmSnapshot.value = snapshot;
+	confirmSnapshot.value = snapshot
 }
 
 async function confirmRollback() {
-    if (!confirmSnapshot.value || !props.filePath) return false;
-    isRollingBack.value = true;
-    try {
-        const response = await axios.post(generateOcsUrl("apps/gitcloud/rollback"), {
-            filePath: props.filePath,
-            snapshotId: confirmSnapshot.value.id,
-        });
-        rollbackStatus.value = "success";
-        rollbackResultMessage.value = response.data.ocs.data.message;
-        confirmSnapshot.value = null;
-        emit("rolled-back");
-        await loadSnapshots();
-    } catch (error) {
-        rollbackStatus.value = "error";
-        rollbackResultMessage.value = extractErrorMessage(error, "Failed to roll back the selected file.");
-        confirmSnapshot.value = null;
-    } finally {
-        isRollingBack.value = false;
-    }
-    return false;
+	if (!confirmSnapshot.value || !props.filePath) return false
+	isRollingBack.value = true
+	try {
+		const response = await axios.post(generateOcsUrl('apps/gitcloud/rollback'), {
+			filePath: props.filePath,
+			snapshotId: confirmSnapshot.value.id,
+		})
+		rollbackStatus.value = 'success'
+		rollbackResultMessage.value = response.data.ocs.data.message
+		confirmSnapshot.value = null
+		emit('rolledBack')
+		await loadSnapshots()
+	} catch (error) {
+		rollbackStatus.value = 'error'
+		rollbackResultMessage.value = extractErrorMessage(error, 'Failed to roll back the selected file.')
+		confirmSnapshot.value = null
+	} finally {
+		isRollingBack.value = false
+	}
+	return false
 }
 
 function cancelRollbackConfirm() {
-    confirmSnapshot.value = null;
+	confirmSnapshot.value = null
 }
 
 function close() {
-    emit("update:open", false);
+	emit('update:open', false)
 }
 
 const confirmButtons = computed(() => [
-    {
-        label: "Cancel",
-        variant: "tertiary" as const,
-        callback: () => cancelRollbackConfirm(),
-    },
-    {
-        label: isRollingBack.value ? "Rolling back…" : "Rollback",
-        variant: "error" as const,
-        disabled: isRollingBack.value,
-        callback: confirmRollback,
-    },
-]);
+	{
+		label: 'Cancel',
+		variant: 'tertiary' as const,
+		callback: () => cancelRollbackConfirm(),
+	},
+	{
+		label: isRollingBack.value ? 'Rolling back…' : 'Rollback',
+		variant: 'error' as const,
+		disabled: isRollingBack.value,
+		callback: confirmRollback,
+	},
+])
 </script>
 
 <template>
-    <div v-if="open" class="rollback-panel__backdrop" @click.self="close">
-        <div class="rollback-panel">
-            <div class="rollback-panel__header">
-                <div>
-                    <div class="rollback-panel__eyebrow">Snapshot history</div>
-                    <div class="rollback-panel__filename">{{ filePath ? fileName(filePath) : "" }}</div>
-                </div>
-                <NcButton variant="tertiary" aria-label="Close" @click="close">
-                    <template #icon>
-                        <span class="rollback-panel__close-icon" v-html="CloseIcon" />
-                    </template>
-                </NcButton>
-            </div>
+	<div v-if="open" class="rollback-panel__backdrop" @click.self="close">
+		<div class="rollback-panel">
+			<div class="rollback-panel__header">
+				<div>
+					<div class="rollback-panel__eyebrow">
+						Snapshot history
+					</div>
+					<div class="rollback-panel__filename">
+						{{ filePath ? fileName(filePath) : "" }}
+					</div>
+				</div>
+				<NcButton variant="tertiary" aria-label="Close" @click="close">
+					<template #icon>
+						<span class="rollback-panel__close-icon" v-html="CloseIcon" />
+					</template>
+				</NcButton>
+			</div>
 
-            <p v-if="rollbackStatus === 'success'" class="rollback-panel__banner rollback-panel__banner--success">
-                {{ rollbackResultMessage }}
-            </p>
-            <p v-if="rollbackStatus === 'error'" class="rollback-panel__banner rollback-panel__banner--error">
-                {{ rollbackResultMessage }}
-            </p>
+			<p v-if="rollbackStatus === 'success'" class="rollback-panel__banner rollback-panel__banner--success">
+				{{ rollbackResultMessage }}
+			</p>
+			<p v-if="rollbackStatus === 'error'" class="rollback-panel__banner rollback-panel__banner--error">
+				{{ rollbackResultMessage }}
+			</p>
 
-            <div class="rollback-panel__body">
-                <NcLoadingIcon v-if="isLoading" :size="32" />
-                <p v-else-if="loadError" class="rollback-panel__banner rollback-panel__banner--error">
-                    {{ loadError }}
-                </p>
-                <p v-else-if="snapshots.length === 0" class="rollback-panel__empty">
-                    No snapshots found for this file.
-                </p>
-                <div v-else class="rollback-panel__timeline">
-                    <div v-for="(snapshot, index) in snapshots" :key="snapshot.id" class="rollback-panel__row">
-                        <div class="rollback-panel__rail">
-                            <span
-                                class="rollback-panel__node"
-                                :class="{ 'rollback-panel__node--current': index === 0 }"
-                            />
-                            <span v-if="index < snapshots.length - 1" class="rollback-panel__connector" />
-                        </div>
-                        <div class="rollback-panel__content">
-                            <div class="rollback-panel__meta-line">
-                                <span class="rollback-panel__message">{{ snapshot.message }}</span>
-                                <span
-                                    class="rollback-panel__pill"
-                                    :class="
-                                        snapshot.status === 'committed'
-                                            ? 'rollback-panel__pill--success'
-                                            : 'rollback-panel__pill--warning'
-                                    "
-                                >
-                                    {{ snapshot.status === "committed" ? "Committed" : "Rolled back" }}
-                                </span>
-                            </div>
-                            <div class="rollback-panel__timestamp">
-                                {{ formatRelative(snapshot.createdAt) }} · {{ formatAbsolute(snapshot.createdAt) }} ·
-                                <span class="rollback-panel__hash">{{ snapshot.commitHash.slice(0, 7) }}</span>
-                            </div>
-                            <span v-if="index === 0" class="rollback-panel__current-label">Current version</span>
-                            <NcButton v-else variant="secondary" @click="requestRollback(snapshot)">
-                                Rollback to this snapshot
-                            </NcButton>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+			<div class="rollback-panel__body">
+				<NcLoadingIcon v-if="isLoading" :size="32" />
+				<p v-else-if="loadError" class="rollback-panel__banner rollback-panel__banner--error">
+					{{ loadError }}
+				</p>
+				<p v-else-if="snapshots.length === 0" class="rollback-panel__empty">
+					No snapshots found for this file.
+				</p>
+				<div v-else class="rollback-panel__timeline">
+					<div v-for="(snapshot, index) in snapshots" :key="snapshot.id" class="rollback-panel__row">
+						<div class="rollback-panel__rail">
+							<span
+								class="rollback-panel__node"
+								:class="{ 'rollback-panel__node--current': index === 0 }" />
+							<span v-if="index < snapshots.length - 1" class="rollback-panel__connector" />
+						</div>
+						<div class="rollback-panel__content">
+							<div class="rollback-panel__meta-line">
+								<span class="rollback-panel__message">{{ snapshot.message }}</span>
+								<span
+									class="rollback-panel__pill"
+									:class="
+										snapshot.status === 'committed'
+											? 'rollback-panel__pill--success'
+											: 'rollback-panel__pill--warning'
+									">
+									{{ snapshot.status === "committed" ? "Committed" : "Rolled back" }}
+								</span>
+							</div>
+							<div class="rollback-panel__timestamp">
+								{{ formatRelative(snapshot.createdAt) }} · {{ formatAbsolute(snapshot.createdAt) }} ·
+								<span class="rollback-panel__hash">{{ snapshot.commitHash.slice(0, 7) }}</span>
+							</div>
+							<span v-if="index === 0" class="rollback-panel__current-label">Current version</span>
+							<NcButton v-else variant="secondary" @click="requestRollback(snapshot)">
+								Rollback to this snapshot
+							</NcButton>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
 
-        <NcDialog
-            :open="confirmSnapshot !== null"
-            name="Rollback this file?"
-            size="small"
-            :buttons="confirmButtons"
-            @update:open="(value) => !value && cancelRollbackConfirm()"
-        >
-            <p class="rollback-confirm__message">
-                This replaces the current content of
-                <strong>{{ filePath ? fileName(filePath) : "" }}</strong>
-                with the snapshot "{{ confirmSnapshot?.message }}" ({{
-                    confirmSnapshot ? formatRelative(confirmSnapshot.createdAt) : ""
-                }}). This can't be undone automatically.
-            </p>
-        </NcDialog>
-    </div>
+		<NcDialog
+			:open="confirmSnapshot !== null"
+			name="Rollback this file?"
+			size="small"
+			:buttons="confirmButtons"
+			@update:open="(value) => !value && cancelRollbackConfirm()">
+			<p class="rollback-confirm__message">
+				This replaces the current content of
+				<strong>{{ filePath ? fileName(filePath) : "" }}</strong>
+				with the snapshot "{{ confirmSnapshot?.message }}" ({{
+					confirmSnapshot ? formatRelative(confirmSnapshot.createdAt) : ""
+				}}). This can't be undone automatically.
+			</p>
+		</NcDialog>
+	</div>
 </template>
 
 <style scoped>

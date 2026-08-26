@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.24] - 2026-08-25
+
+### Fixed
+
+- `npm run lint`, `npm run stylelint`, and type-checking had been silently broken in this dev environment since at least 0.1.13 (repeated "could not be run in this environment" notes in this changelog) — actually four separate, unrelated defects:
+  - `eslint` was auto-detecting flat-config mode because a stray `eslint.config.js` belonging to the parent Nextcloud core checkout (this app is developed nested inside a full server checkout) sits in an ancestor directory; ESLint 8 searches upward for one to decide config format, found that one, and silently ignored this project's own `.eslintrc.cjs` entirely before failing outright (the ancestor config requires a package not installed here). Fixed by forcing legacy config mode (`ESLINT_USE_FLAT_CONFIG=false`) in the `lint` script.
+  - Even once running, `.eslintrc.cjs` extended plain `@nextcloud`, whose Vue override parses `<script>` blocks with `@babel/eslint-parser` — which cannot parse TypeScript, so every `.vue` file in this project (all use `<script setup lang="ts">`) failed to parse and was silently skipped from linting entirely. Switched to `@nextcloud/eslint-config/vue3`, the vendor's actual Vue 3 + TypeScript preset (this project's own stack, per AGENTS.md).
+  - `stylelint.config.cjs` extended `stylelint-config-recommended-vue`, which defines all its rules inside `overrides` with no top-level `rules` key — this crashes an internal stylelint 17 config-resolution step that runs without a specific file path, throwing "No rules found within configuration" before any file is linted. Switched to `@nextcloud/stylelint-config`, a devDependency this project already declared but never actually wired up.
+  - The `stylelint` script's `src/**/*.vue` (etc.) globs were unquoted, so the shell expanded them itself before stylelint saw them; without `globstar` enabled this silently dropped every top-level file (e.g. `src/App.vue`) from linting, checking only files already nested under `src/components/`. Quoted the globs so stylelint's own glob engine (which correctly treats `**` as any depth) handles expansion instead.
+- Once the tools actually ran for the first time, they surfaced real (if minor) findings, now fixed: ~1300 mechanical style violations (tabs vs. spaces, single-quotes, no-semicolons — the project's own already-configured style) via `eslint --fix`, verified against a clean `vite build` afterward; a `no-descending-specificity` CSS ordering bug in `App.vue`; a non-camelCase custom event name (`RollbackPanel.vue`'s `rolled-back` → `rolledBack`, per Vue 3's own event-naming convention); a false-positive `import/no-unresolved` on a Vite-only `?raw` asset import in `addToGitCloud.js` (suppressed with a scoped, commented `eslint-disable-next-line`); and three non-logical CSS properties (`left`/`margin-left`/`padding-left` → `inset-inline`/`margin-inline-start`/`padding-inline-start`) for RTL-language support, per `@nextcloud/stylelint-config`'s `csstools/use-logical` rule.
+- Six pre-existing `vue/no-v-html` warnings (rendering trusted, bundled SVG icon strings via `v-html`, not user input) were left as-is and are not a defect — flagged here since they're the only remaining `npm run lint` output.
+
+`composer lint`, `composer cs:check`, and `vite build` were already passing before this change and are unaffected; this release only touches the frontend lint/stylelint tooling and the style-only source changes those tools surfaced. No PHP or backend behavior changed.
+
 ## [0.1.23] - 2026-08-25
 
 ### Added

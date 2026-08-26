@@ -1,5 +1,5 @@
-import { createApp } from "vue";
-import AdminSettings from "./components/AdminSettings.vue";
+import { createApp } from 'vue'
+import AdminSettings from './components/AdminSettings.vue'
 
-const app = createApp(AdminSettings);
-app.mount("#gitcloud-settings-admin");
+const app = createApp(AdminSettings)
+app.mount('#gitcloud-settings-admin')
