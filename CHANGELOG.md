@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-08-26
+
+### Changed
+
+- No code changes — this release marks Phase 2 as fully closed out and Phase 3 (advanced features) as ready to begin. All five Phase 3 kanban Prerequisites (full PHPUnit suite for 0.1.23's auto-track delete/rename, the three empirically-unconfirmed 0.1.23 behaviors, 0.1.21's Uncommitted-pill tests, 0.1.19's two UI fixes, and the `file_id` migration against a real DB) are now confirmed and moved to Done. See the Phase 3 kanban and README's roadmap section for the full To-Do list this unblocks.
+
 ## [0.1.26] - 2026-08-26
 
 ### Fixed

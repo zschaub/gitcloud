@@ -24,7 +24,7 @@
 
 - **App Name:** GitCloud
 - **Base Directory:** `gitcloud`
-- **Status:** Phase 1 and Phase 2 complete, plus admin/personal Settings pages (max file size limit, personal commit-history deletion) and automatic tracking of files deleted/renamed/moved outside GitCloud. Phase 3 not yet started. This README will be updated as features are implemented.
+- **Status:** Phase 1 and Phase 2 complete, plus admin/personal Settings pages (max file size limit, personal commit-history deletion) and automatic tracking of files deleted/renamed/moved outside GitCloud. All Phase 3 prerequisites are cleared and Phase 3 (advanced features) is ready to begin. This README will be updated as features are implemented.
 
 ## Development Roadmap & Milestones
 
@@ -51,9 +51,9 @@ We will tackle this project in progressive phases to ensure stability and testab
    - ✅ **Follow-up:** Added a real per-file Modified/Unchanged status to `GET /apps/gitcloud/directories` (`VcsService::getFileStatuses`, backed by `git status --porcelain` scoped to each directory's files) and surfaced it in Directory Detail's file list, plus an "N modified" pill on Overview's Committed Directories list. This was the last open item for Phase 2.
    - ✅ **Follow-up:** The per-file status set was later expanded beyond Modified/Unchanged to include `Uncommitted` (a file physically present in an already-tracked folder that's never been committed) and `Deleted` (a committed file removed outside GitCloud), with matching pills/tags in the UI. See CHANGELOG 0.1.21 and 0.1.23.
 
-### 🔮 Phase 3: Advanced Features (TBD)
+### 🔮 Phase 3: Advanced Features (Ready to Start)
 
-**Goal:** Exploration and polish once core operations are stable and tested in real usage.
+**Goal:** Exploration and polish once core operations are stable and tested in real usage. All prerequisites (verifying prior-phase work holds up in the real running instance) are cleared — see the Phase 3 kanban.
 - Compare snapshots
 - Manage branches visually
 - Delete commits (a targeted removal of individual commits from history — distinct from the existing Personal Settings option to wipe a user's *entire* GitCloud history at once)
