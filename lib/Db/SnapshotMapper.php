@@ -110,4 +110,36 @@ class SnapshotMapper extends QBMapper {
 
 		$qb->executeStatement();
 	}
+
+	/**
+	 * Deletes every snapshot row chained to the given file_id, used when a user
+	 * stops tracking a file - clears its whole history regardless of which path(s)
+	 * it was recorded under across any renames.
+	 */
+	public function deleteAllForFileId(string $userId, int $fileId): void {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb
+			->delete($this->getTableName())
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, $qb::PARAM_INT)));
+
+		$qb->executeStatement();
+	}
+
+	/**
+	 * Deletes snapshot rows by exact path match. Used as a fallback when stopping
+	 * tracking of a file whose history predates the file_id migration
+	 * (Version000123Date20260825120000) and so has no file_id to chain by.
+	 */
+	public function deleteAllForFile(string $userId, string $filePath): void {
+		$qb = $this->db->getQueryBuilder();
+
+		$qb
+			->delete($this->getTableName())
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->eq('file_path', $qb->createNamedParameter($filePath)));
+
+		$qb->executeStatement();
+	}
 }

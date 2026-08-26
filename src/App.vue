@@ -2,12 +2,14 @@
 import NcAppContent from '@nextcloud/vue/components/NcAppContent'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import NcButton from '@nextcloud/vue/components/NcButton'
+import NcDialog from '@nextcloud/vue/components/NcDialog'
 import CommitDialog from './components/CommitDialog.vue'
 import RollbackPanel from './components/RollbackPanel.vue'
 import FolderOutlineIcon from '@mdi/svg/svg/folder-outline.svg?raw'
 import ChevronRightIcon from '@mdi/svg/svg/chevron-right.svg?raw'
 import FileDocumentOutlineIcon from '@mdi/svg/svg/file-document-outline.svg?raw'
 import ClockOutlineIcon from '@mdi/svg/svg/clock-outline.svg?raw'
+import LinkOffIcon from '@mdi/svg/svg/link-off.svg?raw'
 import { ref, computed, onMounted } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
@@ -258,6 +260,76 @@ function onRolledBack() {
 	}
 	Promise.all(refreshes)
 }
+
+interface UntrackTarget {
+    type: 'file' | 'directory';
+    path: string;
+}
+
+const untrackConfirmTarget = ref<UntrackTarget | null>(null)
+const isUntracking = ref(false)
+const untrackMessage = ref('')
+const untrackMessageType = ref<null | 'success' | 'error'>(null)
+
+function requestUntrackFile(path: string) {
+	untrackMessageType.value = null
+	untrackConfirmTarget.value = { type: 'file', path }
+}
+
+function requestUntrackDirectory() {
+	if (!selectedDirectory.value) return
+	untrackMessageType.value = null
+	untrackConfirmTarget.value = { type: 'directory', path: selectedDirectory.value }
+}
+
+function cancelUntrackConfirm() {
+	untrackConfirmTarget.value = null
+}
+
+// After untracking, the selected directory may no longer be returned by the
+// backend at all (e.g. its last file was just untracked), so fall back to
+// Overview instead of showing a now-nonexistent Directory Detail view.
+async function refreshAfterUntrack() {
+	await Promise.all([loadStatus(), loadDirectories()])
+	if (selectedDirectory.value && !directories.value.some((dir) => dir.path === selectedDirectory.value)) {
+		deselectDirectory()
+	}
+}
+
+async function confirmUntrack() {
+	const target = untrackConfirmTarget.value
+	if (!target) return false
+	isUntracking.value = true
+	try {
+		const url = target.type === 'file' ? 'apps/gitcloud/untrack' : 'apps/gitcloud/untrack-directory'
+		const response = await axios.post(generateOcsUrl(url), { path: target.path })
+		untrackMessage.value = response.data.ocs.data.message
+		untrackMessageType.value = 'success'
+		untrackConfirmTarget.value = null
+		await refreshAfterUntrack()
+	} catch (error) {
+		untrackMessage.value = extractErrorMessage(error, 'Failed to stop tracking.')
+		untrackMessageType.value = 'error'
+		untrackConfirmTarget.value = null
+	} finally {
+		isUntracking.value = false
+	}
+	return false
+}
+
+const untrackConfirmButtons = computed(() => [
+	{
+		label: 'Cancel',
+		variant: 'tertiary' as const,
+		callback: () => cancelUntrackConfirm(),
+	},
+	{
+		label: isUntracking.value ? 'Stopping…' : 'Stop tracking',
+		variant: 'error' as const,
+		disabled: isUntracking.value,
+		callback: confirmUntrack,
+	},
+])
 </script>
 
 <template>
@@ -363,13 +435,24 @@ function onRolledBack() {
 
 			<!-- State B: Directory Detail -->
 			<template v-else>
-				<NcButton variant="tertiary" class="back-button" @click="deselectDirectory">
-					← Back to Overview
-				</NcButton>
+				<div class="directory-detail__header">
+					<NcButton variant="tertiary" class="back-button" @click="deselectDirectory">
+						← Back to Overview
+					</NcButton>
+					<NcButton variant="tertiary" @click="requestUntrackDirectory">
+						<template #icon>
+							<span class="file-row__history-icon" v-html="LinkOffIcon" />
+						</template>
+						Stop tracking this folder
+					</NcButton>
+				</div>
 				<h2>{{ directoryLabel(selectedDirectory) }}</h2>
 
 				<p v-if="directoryStatusError" class="banner banner--error">
 					{{ directoryStatusError }}
+				</p>
+				<p v-if="untrackMessageType" class="banner" :class="`banner--${untrackMessageType}`">
+					{{ untrackMessage }}
 				</p>
 
 				<section class="stats-grid stats-grid--detail">
@@ -423,6 +506,12 @@ function onRolledBack() {
 								</template>
 								History
 							</NcButton>
+							<NcButton variant="tertiary" @click="requestUntrackFile(file.path)">
+								<template #icon>
+									<span class="file-row__history-icon" v-html="LinkOffIcon" />
+								</template>
+								Stop tracking
+							</NcButton>
 						</li>
 					</ul>
 				</div>
@@ -450,6 +539,24 @@ function onRolledBack() {
 			:file-path="rollbackPanelFilePath"
 			@update:open="rollbackPanelOpen = $event"
 			@rolled-back="onRolledBack" />
+
+		<NcDialog
+			:open="untrackConfirmTarget !== null"
+			name="Stop tracking?"
+			size="small"
+			:buttons="untrackConfirmButtons"
+			@update:open="(value) => !value && cancelUntrackConfirm()">
+			<p class="untrack-confirm__message">
+				<template v-if="untrackConfirmTarget?.type === 'file'">
+					GitCloud will stop tracking <strong>{{ untrackConfirmTarget.path }}</strong> and remove its
+					snapshot history from the dashboard. The file itself is not deleted or modified.
+				</template>
+				<template v-else-if="untrackConfirmTarget">
+					GitCloud will stop tracking every file under <strong>{{ directoryLabel(untrackConfirmTarget.path) }}</strong>
+					and remove their snapshot history from the dashboard. No files are deleted or modified.
+				</template>
+			</p>
+		</NcDialog>
 	</NcAppContent>
 </template>
 
@@ -481,6 +588,11 @@ h2 {
 .banner--error {
     background-color: color-mix(in srgb, var(--color-error) 15%, transparent);
     color: var(--color-error);
+}
+
+.banner--success {
+    background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
+    color: var(--color-success);
 }
 
 .stats-grid {
@@ -715,6 +827,23 @@ h2 {
 
 .back-button {
     margin-bottom: 8px;
+}
+
+.directory-detail__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.untrack-confirm__message {
+    font-size: 13px;
+    color: var(--color-text-maxcontrast);
+    line-height: 1.5;
+}
+
+.untrack-confirm__message strong {
+    color: var(--color-main-text);
 }
 
 .file-row {

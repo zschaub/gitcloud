@@ -532,6 +532,138 @@ final class VcsServiceTest extends TestCase {
 		$this->assertSame([], $service->getCommittedDirectories('testuser'));
 	}
 
+	public function testUntrackFileDeletesByFileIdWhenAvailable(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$snapshot = new Snapshot();
+		$snapshot->setFilePath('folder/a.txt');
+		$snapshot->setFileId(42);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForFile')->with('testuser', 'folder/a.txt')->willReturn([$snapshot]);
+		$snapshotMapper->expects($this->once())->method('deleteAllForFileId')->with('testuser', 42);
+		$snapshotMapper->expects($this->never())->method('deleteAllForFile');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->untrackFile('testuser', 'folder/a.txt');
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testUntrackFileFallsBackToPathMatchWhenFileIdMissing(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$snapshot = new Snapshot();
+		$snapshot->setFilePath('legacy.txt');
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForFile')->with('testuser', 'legacy.txt')->willReturn([$snapshot]);
+		$snapshotMapper->expects($this->once())->method('deleteAllForFile')->with('testuser', 'legacy.txt');
+		$snapshotMapper->expects($this->never())->method('deleteAllForFileId');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->untrackFile('testuser', 'legacy.txt');
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testUntrackFileFailsWhenFileHasNoGitCloudHistory(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForFile')->willReturn([]);
+		$snapshotMapper->expects($this->never())->method('deleteAllForFileId');
+		$snapshotMapper->expects($this->never())->method('deleteAllForFile');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->untrackFile('testuser', 'untracked.txt');
+
+		$this->assertFalse($result['success']);
+	}
+
+	public function testUntrackDirectoryUntracksFilesUnderPrefixIncludingSubdirectories(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$docsFile = new Snapshot();
+		$docsFile->setFilePath('docs/readme.md');
+		$docsFile->setFileId(1);
+
+		$nestedFile = new Snapshot();
+		$nestedFile->setFilePath('docs/sub/notes.txt');
+		$nestedFile->setFileId(2);
+
+		$otherFile = new Snapshot();
+		$otherFile->setFilePath('other/file.txt');
+		$otherFile->setFileId(3);
+
+		$rootFile = new Snapshot();
+		$rootFile->setFilePath('root.txt');
+		$rootFile->setFileId(4);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForUser')->with('testuser')
+			->willReturn([$docsFile, $nestedFile, $otherFile, $rootFile]);
+		$snapshotMapper->method('findAllForFile')->willReturnMap([
+			['testuser', 'docs/readme.md', [$docsFile]],
+			['testuser', 'docs/sub/notes.txt', [$nestedFile]],
+		]);
+		$snapshotMapper->expects($this->exactly(2))->method('deleteAllForFileId')
+			->with('testuser', $this->logicalOr(1, 2));
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->untrackDirectory('testuser', 'docs');
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testUntrackDirectoryAtRootOnlyAffectsTopLevelFiles(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$docsFile = new Snapshot();
+		$docsFile->setFilePath('docs/readme.md');
+		$docsFile->setFileId(1);
+
+		$rootFile = new Snapshot();
+		$rootFile->setFilePath('root.txt');
+		$rootFile->setFileId(4);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForUser')->with('testuser')->willReturn([$docsFile, $rootFile]);
+		$snapshotMapper->method('findAllForFile')->with('testuser', 'root.txt')->willReturn([$rootFile]);
+		$snapshotMapper->expects($this->once())->method('deleteAllForFileId')->with('testuser', 4);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->untrackDirectory('testuser', '/');
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testUntrackDirectoryFailsWhenDirectoryHasNoTrackedFiles(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForUser')->with('testuser')->willReturn([]);
+		$snapshotMapper->expects($this->never())->method('deleteAllForFileId');
+		$snapshotMapper->expects($this->never())->method('deleteAllForFile');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->untrackDirectory('testuser', 'nonexistent');
+
+		$this->assertFalse($result['success']);
+	}
+
 	public function testDeleteHistoryRemovesGitDirectoryAndReinitializes(): void {
 		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
 		mkdir($this->tmpRepoPath);

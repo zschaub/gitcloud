@@ -1411,4 +1411,151 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(401, $response->getStatus());
 	}
+
+	public function testUntrackFileCallsVcsServiceWithUserAndPath(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->once())
+			->method('untrackFile')
+			->with('testuser', 'folder/a.txt')
+			->willReturn(['success' => true, 'message' => 'Stopped tracking folder/a.txt.']);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackFile('folder/a.txt');
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(200, $response->getStatus());
+	}
+
+	public function testUntrackFileFailsWithoutPath(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('untrackFile');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackFile('');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testUntrackFileFailsWhenNoUserIsLoggedIn(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn(null);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('untrackFile');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackFile('folder/a.txt');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(401, $response->getStatus());
+	}
+
+	public function testUntrackFileReturnsErrorStatusWhenServiceReportsFailure(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('untrackFile')->willReturn(['success' => false, 'message' => 'not tracked.']);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackFile('untracked.txt');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testUntrackDirectoryCallsVcsServiceWithUserAndPath(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->once())
+			->method('untrackDirectory')
+			->with('testuser', 'docs')
+			->willReturn(['success' => true, 'message' => 'Stopped tracking 2 file(s) in docs.']);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackDirectory('docs');
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(200, $response->getStatus());
+	}
+
+	public function testUntrackDirectoryFailsWithoutPath(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('untrackDirectory');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackDirectory('');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testUntrackDirectoryFailsWhenNoUserIsLoggedIn(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn(null);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('untrackDirectory');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+
+		$response = $controller->untrackDirectory('docs');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(401, $response->getStatus());
+	}
 }

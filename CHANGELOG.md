@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-08-26
+
+### Added
+
+- GitCloud can now stop tracking a specific file or folder without touching it on disk — the third Phase 3 item. Each file row in Directory Detail has a new "Stop tracking" button (next to "History"), and the Directory Detail header has a "Stop tracking this folder" button; both open a confirm dialog (mirroring `RollbackPanel`'s existing confirm pattern) before calling one of two new endpoints. `POST /apps/gitcloud/untrack` (`VcsService::untrackFile`) deletes every `gitcloud_snapshots` row for a single file, chained by `file_id` when available so a renamed file's full history is cleared regardless of which path each row was recorded under (falls back to an exact path match for legacy pre-`file_id` rows). `POST /apps/gitcloud/untrack-directory` (`VcsService::untrackDirectory`) does the same for every currently-tracked file under a directory, including nested subdirectories — mirroring how a folder delete already cascades to its tracked descendants (see 0.1.25). The repository root (`/`) is deliberately *not* recursive the same way: only files directly grouped under it are affected, so a single click can't untrack a user's entire GitCloud history at once — that's what the existing Personal Settings "delete all history" action is for.
+- Once untracked, a file/folder is indistinguishable from one that was never committed: it disappears from the dashboard (dropped by the same `getCommittedDirectories` grouping every other listing already relies on), and the existing auto-commit listeners (`GitTrackedNodeDeletedListener`/`RenamedListener`/`RestoredListener`) stop reacting to further changes on it, since they all already gate on `SnapshotMapper::findLatestForFileId` returning history. This is a GitCloud-level bookkeeping action only — the underlying Git repository, its commit history, and the working-tree file are all left completely untouched; this is distinct from the "Delete commits" Phase 3 item, which will target actually removing commits from Git history.
+- If the selected directory is fully untracked (its own last file, or the whole folder at once), the dashboard now automatically falls back to Overview instead of showing an empty Directory Detail view for a directory the backend no longer returns.
+
+Covered by 8 new `VcsServiceTest` cases (file-id chaining, legacy path fallback, not-tracked, prefix-based subdirectory recursion, root-only-scopes-to-top-level, empty-directory-fails) and 6 new `ApiTest` cases for the two endpoints (success, missing path, no user logged in — ×2). Full PHPUnit suite (104 tests, up from 91, 241 assertions) verified passing inside the running `stable34` container (synced via `docker cp` + a container restart first); `composer lint`, `composer cs:check`, and `composer openapi` (spec regenerated for the two new routes) also verified. Frontend: `npm run lint`, `npm run stylelint`, and a clean `vite build` all verified (only the pre-existing, known-benign `v-html` warnings remain).
+
 ## [0.2.2] - 2026-08-26
 
 ### Fixed

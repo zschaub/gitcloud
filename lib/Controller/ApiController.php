@@ -567,6 +567,89 @@ class ApiController extends OCSController {
 	}
 
 	/**
+	 * Stops GitCloud from tracking a single file - deletes its recorded snapshot
+	 * history so it stops appearing on the dashboard and stops reacting to further
+	 * changes. The file itself, and any Git history already committed for it, is
+	 * left untouched on disk.
+	 *
+	 * @param string $path File path, relative to the user's storage, to stop tracking.
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: File untracked.
+	 * 400: Missing path, or the file is not tracked by GitCloud.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'POST', url: '/untrack')]
+	public function untrackFile(string $path = ''): DataResponse {
+		if (trim($path) === '') {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => 'Missing file path.',
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		$result = $this->vcsService->untrackFile($this->userSession->getUser()->getUID(), $path);
+
+		return new DataResponse(
+			[
+				'status' => $result['success'] ? 'success' : 'error',
+				'message' => $result['message'],
+			],
+			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
+		);
+	}
+
+	/**
+	 * Stops GitCloud from tracking every currently-tracked file under a directory,
+	 * including nested subdirectories. The repository root ("/") only affects files
+	 * directly at the top level, not the whole repository - see VcsService::untrackDirectory().
+	 *
+	 * @param string $path Directory path, as returned by GET /directories, to stop tracking.
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Directory untracked.
+	 * 400: Missing path, or the directory is not tracked by GitCloud.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'POST', url: '/untrack-directory')]
+	public function untrackDirectory(string $path = ''): DataResponse {
+		if (trim($path) === '') {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => 'Missing directory path.',
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		$result = $this->vcsService->untrackDirectory($this->userSession->getUser()->getUID(), $path);
+
+		return new DataResponse(
+			[
+				'status' => $result['success'] ? 'success' : 'error',
+				'message' => $result['message'],
+			],
+			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
+		);
+	}
+
+	/**
 	 * Resolves $node to the repository-relative path(s) of the file(s) it represents,
 	 * each paired with its Nextcloud fileid (used to link commit history across a later
 	 * rename/move/delete). A folder's own path can't be committed as-is (git has no

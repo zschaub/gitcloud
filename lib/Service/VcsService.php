@@ -661,6 +661,79 @@ class VcsService {
 	}
 
 	/**
+	 * Stops GitCloud from tracking a single file: deletes every snapshot row
+	 * recorded for it, chained by file_id when available so a renamed file's full
+	 * history is cleared regardless of which path each row was recorded under
+	 * (falls back to an exact path match for legacy rows predating the file_id
+	 * migration). The file itself, and any Git history already committed for it,
+	 * is left untouched on disk - this only stops GitCloud's own dashboard and
+	 * auto-tracking listeners (which gate on SnapshotMapper history existing via
+	 * findLatestForFileId) from reacting to it further.
+	 * @return array{success: bool, message: string}
+	 */
+	public function untrackFile(string $userId, string $relativeFilePath): array {
+		$relativeFilePath = ltrim($relativeFilePath, '/');
+
+		$snapshots = $this->snapshotMapper->findAllForFile($userId, $relativeFilePath);
+		if (empty($snapshots)) {
+			return ['success' => false, 'message' => sprintf('%s is not tracked by GitCloud.', $relativeFilePath)];
+		}
+
+		$fileId = $snapshots[0]->getFileId();
+		if ($fileId !== null) {
+			$this->snapshotMapper->deleteAllForFileId($userId, $fileId);
+		} else {
+			$this->snapshotMapper->deleteAllForFile($userId, $relativeFilePath);
+		}
+
+		$this->logger->info(sprintf('Stopped tracking %s in GitCloud.', $relativeFilePath));
+		return ['success' => true, 'message' => sprintf('Stopped tracking %s.', $relativeFilePath)];
+	}
+
+	/**
+	 * Stops GitCloud from tracking every currently-tracked file under a directory,
+	 * including nested subdirectories (mirroring how a folder delete already
+	 * cascades to its tracked descendants - see GitTrackedNodeDeletedListener), by
+	 * calling untrackFile() for each. The repository root ("/") is deliberately
+	 * not treated the same recursive way - only files directly grouped under it
+	 * are affected - so a single click can't untrack the user's entire GitCloud
+	 * history at once; that's what the Personal Settings "delete all history"
+	 * action is already for.
+	 * @return array{success: bool, message: string}
+	 */
+	public function untrackDirectory(string $userId, string $directoryPath): array {
+		$isRoot = $directoryPath === '/';
+		$prefix = $isRoot ? '' : rtrim($directoryPath, '/') . '/';
+
+		$filesToUntrack = [];
+		foreach ($this->getCommittedDirectories($userId) as $directory) {
+			if ($isRoot) {
+				if ($directory['path'] === '/') {
+					$filesToUntrack = $directory['files'];
+				}
+				continue;
+			}
+
+			foreach ($directory['files'] as $filePath) {
+				if (str_starts_with($filePath, $prefix)) {
+					$filesToUntrack[] = $filePath;
+				}
+			}
+		}
+
+		if (empty($filesToUntrack)) {
+			return ['success' => false, 'message' => sprintf('%s is not tracked by GitCloud.', $directoryPath)];
+		}
+
+		foreach ($filesToUntrack as $filePath) {
+			$this->untrackFile($userId, $filePath);
+		}
+
+		$this->logger->info(sprintf('Stopped tracking %d file(s) under %s in GitCloud.', count($filesToUntrack), $directoryPath));
+		return ['success' => true, 'message' => sprintf('Stopped tracking %d file(s) in %s.', count($filesToUntrack), $directoryPath)];
+	}
+
+	/**
 	 * Groups the user's ever-committed files by directory, for the dashboard's
 	 * committed-directories list. A file with no directory component (i.e. at
 	 * the repository root) is grouped under "/".

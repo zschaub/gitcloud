@@ -15,6 +15,7 @@
 2. **Open the GitCloud tab.** Select **GitCloud** from the Nextcloud left navigation to open the dashboard.
    - **Overview** lists every directory you've committed files under, with aggregate stats (files tracked, directories, total size, Git status) and a search box to filter the list.
    - Selecting a directory switches to **Directory Detail**, showing that directory's committed files with a per-file status of Modified, Unchanged, Uncommitted (present on disk but never committed), or Deleted. The Committed Directories list on Overview also shows "N modified"/"N uncommitted" pills per directory. From here you can select files and commit further changes, or open a file's **History** to view its snapshot timeline and roll back to an earlier version.
+   - Each file has a **Stop tracking** button, and Directory Detail has a **Stop tracking this folder** button (which also covers nested subfolders), to remove GitCloud's own snapshot history for that file/folder after a confirmation prompt. This only affects GitCloud's dashboard/bookkeeping — the file itself, and any Git history already committed for it, are left completely untouched on disk.
 3. **Delete, rename, or move a tracked file however you normally would** (Files app, WebDAV, sync client, etc.) — no need to do this "through" GitCloud. GitCloud detects the change immediately and auto-commits it to keep its history in sync: a deleted file shows a **Deleted** status in Directory Detail (its History and Rollback still work, and rolling back recreates the file); a renamed or moved file's history automatically follows it to its new location; restoring a deleted file from Nextcloud's trash automatically re-commits it and clears its **Deleted** status.
 4. **Configure GitCloud in Nextcloud Settings.**
    - **Settings > Administration > GitCloud** lets an admin set the maximum file size GitCloud will commit and whether an oversized file blocks the commit (default) or is committed anyway with a warning.
@@ -57,7 +58,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 - Compare snapshots
 - Manage branches visually
 - Delete commits (a targeted removal of individual commits from history — distinct from the existing Personal Settings option to wipe a user's *entire* GitCloud history at once)
-- Remove specific files / folders from GitCloud (stop tracking a file without deleting it from disk)
+- ✅ ~~Remove specific files / folders from GitCloud (stop tracking a file without deleting it from disk)~~ — done in 0.2.3
 - ✅ ~~Git binary not installed error message~~ — done in 0.2.1, see the note in Requirements
 - Multi-file / whole-directory rollback to a single point in time — rollback is currently per-file only; restoring several files together to how they looked at a given moment was deliberately scoped out of the original rollback implementation
 - Diff/preview view — show what actually changed before committing or before rolling back; both actions are currently "blind," with no content diff shown anywhere in the UI
