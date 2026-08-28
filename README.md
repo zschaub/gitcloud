@@ -8,6 +8,20 @@
 ## Requirements
 
 - **The `git` binary must be installed and on the `PATH` of the user running PHP** (e.g. `www-data`/php-fpm) on the Nextcloud server. GitCloud has no bundled git and no PHP git library — every operation (`VcsService::runGit`/`runGitConfigGet`/`runGitConfigSet`) shells out directly to the `git` executable via `proc_open`. If `git` isn't installed, commit/rollback/status requests fail with a clear "git is not installed on this server" message rather than a generic error.
+- **PHP 8.1+** (see `composer.json`).
+- **Composer**, only needed to install PHP dependencies and generate the autoloader (`vendor/` is not committed to the repo).
+- **Node ^20 and npm ^11**, only needed to build the frontend assets (see `package.json`).
+
+## Installation
+
+1. **Install Nextcloud 34.** GitCloud pins to this exact major version (`min-version="34" max-version="34"` in `appinfo/info.xml`); other versions aren't supported.
+2. **Download GitCloud** (clone this repo) into a temporary location.
+3. **Move it into your Nextcloud apps directory** — e.g. `/path/to/nextcloud/apps/gitcloud`, or your custom apps path if `config.php`'s `apps_paths` points elsewhere. Make sure the files are owned by the same user PHP runs as (e.g. `chown -R www-data:www-data apps/gitcloud`).
+4. **Build it**, from inside the `gitcloud` app directory:
+   - `composer install --no-dev` — installs PHP dependencies and generates the autoloader (`vendor/` is not committed to the repo).
+   - `npm install && npm run build` — compiles the frontend into `js/`/`css/` (also not committed).
+5. **Confirm the `git` binary is installed** on the server and reachable by the PHP process user (see Requirements above) — GitCloud will report a clear error on first use if it isn't.
+6. **Enable the app** — in Nextcloud, go to **Settings > Apps**, find GitCloud, and click **Enable**, or run `occ app:enable gitcloud` from the server.
 
 ## Usage
 
