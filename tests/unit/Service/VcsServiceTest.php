@@ -7,6 +7,8 @@ namespace Service;
 use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Db\SnapshotMapper;
 use OCA\GitCloud\Service\VcsService;
+use OCP\App\AppPathNotFoundException;
+use OCP\App\IAppManager;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Files\Folder;
@@ -16,12 +18,51 @@ use Psr\Log\LoggerInterface;
 
 final class VcsServiceTest extends TestCase {
 	private ?string $tmpRepoPath = null;
+	private ?string $tmpAppPath = null;
 
 	protected function tearDown(): void {
 		if ($this->tmpRepoPath !== null && is_dir($this->tmpRepoPath)) {
 			exec('rm -rf ' . escapeshellarg($this->tmpRepoPath));
 		}
 		$this->tmpRepoPath = null;
+
+		if ($this->tmpAppPath !== null && is_dir($this->tmpAppPath)) {
+			exec('rm -rf ' . escapeshellarg($this->tmpAppPath));
+		}
+		$this->tmpAppPath = null;
+	}
+
+	/**
+	 * Maps the real architecture PHPUnit is currently running under to the same
+	 * bin/<arch>/ directory name VcsService::findBundledGitBinary() would look for,
+	 * so these tests work on whatever architecture actually runs them (amd64 or
+	 * arm64 CI runners alike) instead of hardcoding one.
+	 */
+	private function currentBundledArchDir(): string {
+		return match (php_uname('m')) {
+			'x86_64', 'amd64' => 'amd64',
+			'aarch64', 'arm64' => 'arm64',
+			default => throw new \RuntimeException('Unsupported test architecture: ' . php_uname('m')),
+		};
+	}
+
+	/**
+	 * Creates a fake "app install directory" containing bin/<arch>/git as an
+	 * executable shell script that unconditionally prints $marker and exits 0,
+	 * regardless of the git subcommand/args it's invoked with. Used to prove
+	 * VcsService actually invoked this bundled binary rather than real system git,
+	 * without needing a real static git binary in the test environment.
+	 */
+	private function createFakeBundledGitBinary(string $marker, bool $executable = true): string {
+		$this->tmpAppPath = sys_get_temp_dir() . '/gitcloud-test-app-' . uniqid();
+		$binDir = $this->tmpAppPath . '/bin/' . $this->currentBundledArchDir();
+		mkdir($binDir, 0755, true);
+
+		$binaryPath = $binDir . '/git';
+		file_put_contents($binaryPath, "#!/bin/sh\necho '{$marker}'\nexit 0\n");
+		chmod($binaryPath, $executable ? 0755 : 0644);
+
+		return $this->tmpAppPath;
 	}
 
 	public function testCommitChangesRecordsSnapshotWithHeadCommitHashAndNoParent(): void {
@@ -1027,5 +1068,120 @@ final class VcsServiceTest extends TestCase {
 		$this->assertFalse($result['success']);
 		$this->assertStringStartsWith('Unable to start the git process: ', $result['output']);
 		$this->assertNotSame('Unable to start the git process: ', $result['output']);
+	}
+
+	public function testRunGitPrefersBundledBinaryForCurrentArchitectureWhenPresentAndExecutable(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($appPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertTrue($result['success']);
+		$this->assertStringContainsString('BUNDLED_GIT_MARKER', $result['output']);
+	}
+
+	public function testRunGitFallsBackToSystemGitWhenBundledBinaryDoesNotExist(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		// Real app path, but nothing was ever fetched into bin/<arch>/git under it.
+		$this->tmpAppPath = sys_get_temp_dir() . '/gitcloud-test-app-' . uniqid();
+		mkdir($this->tmpAppPath);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($this->tmpAppPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertTrue($result['success']);
+		$this->assertStringContainsString('git version', $result['output']);
+	}
+
+	public function testRunGitFallsBackToSystemGitWhenBundledBinaryExistsButIsNotExecutable(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER', executable: false);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($appPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertTrue($result['success']);
+		$this->assertStringContainsString('git version', $result['output']);
+		$this->assertStringNotContainsString('BUNDLED_GIT_MARKER', $result['output']);
+	}
+
+	public function testRunGitFallsBackToSystemGitWhenAppPathCannotBeResolved(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willThrowException(new AppPathNotFoundException());
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertTrue($result['success']);
+		$this->assertStringContainsString('git version', $result['output']);
+	}
+
+	public function testRunGitStillFailsWithClearErrorWhenNeitherBundledNorSystemGitIsAvailable(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		// Real app path, but nothing was ever fetched into bin/<arch>/git under it,
+		// combined with no system git on PATH - the worst case, still a clear error.
+		$this->tmpAppPath = sys_get_temp_dir() . '/gitcloud-test-app-' . uniqid();
+		mkdir($this->tmpAppPath);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($this->tmpAppPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager);
+
+		$originalPath = getenv('PATH');
+		putenv('PATH=' . sys_get_temp_dir());
+		try {
+			$result = $service->runGit($this->tmpRepoPath, ['--version']);
+		} finally {
+			putenv($originalPath === false ? 'PATH' : 'PATH=' . $originalPath);
+		}
+
+		$this->assertFalse($result['success']);
+		$this->assertSame(VcsService::GIT_NOT_INSTALLED_MESSAGE, $result['output']);
 	}
 }

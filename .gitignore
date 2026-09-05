@@ -11,3 +11,8 @@
 /node_modules/
 /js/
 /css/
+
+# Fetched at build time by `composer fetch-git-static` from the companion
+# gitcloud-git-static project's checksummed releases (see build/git-static.json) -
+# not committed, same treatment as /vendor/, /js/, /css/ above.
+/bin/

@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace OCA\GitCloud\Service;
 
+use OCA\GitCloud\AppInfo\Application;
 use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Db\SnapshotMapper;
+use OCP\App\AppPathNotFoundException;
+use OCP\App\IAppManager;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Files\Folder;
@@ -20,14 +23,24 @@ class VcsService {
 	private LoggerInterface $logger;
 	private SnapshotMapper $snapshotMapper;
 	private ITimeFactory $timeFactory;
+	private ?IAppManager $appManager;
 	private ?bool $gitAvailable = null;
+	private string|false|null $resolvedGitBinary = null;
 
 	public const GIT_NOT_INSTALLED_MESSAGE = 'git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.';
 
-	public function __construct(LoggerInterface $logger, SnapshotMapper $snapshotMapper, ITimeFactory $timeFactory) {
+	/**
+	 * $appManager is nullable/optional (rather than required) so every existing direct
+	 * `new VcsService(...)` call site - in tests, which don't care about bundled-binary
+	 * resolution - keeps working unchanged. Nextcloud's DI container still injects the
+	 * real IAppManager for production use regardless of the default, since it resolves
+	 * constructor parameters by type hint rather than by whether one is optional.
+	 */
+	public function __construct(LoggerInterface $logger, SnapshotMapper $snapshotMapper, ITimeFactory $timeFactory, ?IAppManager $appManager = null) {
 		$this->logger = $logger;
 		$this->snapshotMapper = $snapshotMapper;
 		$this->timeFactory = $timeFactory;
+		$this->appManager = $appManager;
 	}
 
 	/**
@@ -51,6 +64,56 @@ class VcsService {
 		}
 
 		return $this->gitAvailable = false;
+	}
+
+	/**
+	 * Resolves which git executable to invoke: a bundled static binary matching this
+	 * server's architecture if one was fetched into bin/<arch>/git at build time (see
+	 * the companion gitcloud-git-static project), otherwise a system "git" found on
+	 * PATH, otherwise false. Cached per-instance like isGitAvailable().
+	 */
+	private function resolveGitBinary(): string|false {
+		if ($this->resolvedGitBinary !== null) {
+			return $this->resolvedGitBinary;
+		}
+
+		$bundled = $this->findBundledGitBinary();
+		if ($bundled !== false) {
+			return $this->resolvedGitBinary = $bundled;
+		}
+
+		return $this->resolvedGitBinary = ($this->isGitAvailable() ? 'git' : false);
+	}
+
+	/**
+	 * Looks for a bundled static git binary at bin/<arch>/git inside this app's own
+	 * install directory. Only linux/amd64 and linux/arm64 builds are published today
+	 * (see gitcloud-git-static) - any other OS/architecture, or a missing/non-executable
+	 * file, is treated the same as "no bundled binary" and falls back to PATH via
+	 * resolveGitBinary(), never a hard failure.
+	 */
+	private function findBundledGitBinary(): string|false {
+		if ($this->appManager === null || PHP_OS_FAMILY !== 'Linux') {
+			return false;
+		}
+
+		$arch = match (php_uname('m')) {
+			'x86_64', 'amd64' => 'amd64',
+			'aarch64', 'arm64' => 'arm64',
+			default => null,
+		};
+		if ($arch === null) {
+			return false;
+		}
+
+		try {
+			$appPath = $this->appManager->getAppPath(Application::APP_ID);
+		} catch (AppPathNotFoundException) {
+			return false;
+		}
+
+		$candidate = $appPath . '/bin/' . $arch . '/git';
+		return (is_file($candidate) && is_executable($candidate)) ? $candidate : false;
 	}
 
 	/**
@@ -319,7 +382,8 @@ class VcsService {
 	 * @return array{success: bool, output: string}
 	 */
 	public function runGit(string $cwd, array $args): array {
-		if (!$this->isGitAvailable()) {
+		$gitBinary = $this->resolveGitBinary();
+		if ($gitBinary === false) {
 			$this->logger->error('Cannot run git command: ' . self::GIT_NOT_INSTALLED_MESSAGE);
 			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
 		}
@@ -364,7 +428,7 @@ class VcsService {
 		// in describeProcOpenFailure() below rather than left to PHP's own warning.
 		error_clear_last();
 		$process = @proc_open(
-			array_merge(['git'], $args),
+			array_merge([$gitBinary], $args),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
@@ -397,11 +461,16 @@ class VcsService {
 	 * Runs a git config get command directly via proc_open (used during identity setup).
 	 */
 	public function runGitConfigGet(string $key, string $cwd): array {
+		$gitBinary = $this->resolveGitBinary();
+		if ($gitBinary === false) {
+			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
+		}
+
 		// Suppressed: a failure here is deliberately captured via error_get_last()
 		// in describeProcOpenFailure() below rather than left to PHP's own warning.
 		error_clear_last();
 		$process = @proc_open(
-			array_merge(['git', 'config', '--get', $key]),
+			array_merge([$gitBinary, 'config', '--get', $key]),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
@@ -427,11 +496,16 @@ class VcsService {
 	 * Runs a git config set command directly via proc_open (used during identity setup).
 	 */
 	public function runGitConfigSet(string $key, string $value, string $cwd): array {
+		$gitBinary = $this->resolveGitBinary();
+		if ($gitBinary === false) {
+			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
+		}
+
 		// Suppressed: a failure here is deliberately captured via error_get_last()
 		// in describeProcOpenFailure() below rather than left to PHP's own warning.
 		error_clear_last();
 		$process = @proc_open(
-			array_merge(['git', 'config', $key, $value]),
+			array_merge([$gitBinary, 'config', $key, $value]),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-09-05
+
+### Added
+
+- First step of the Phase 3 "Integrate static git into GitCloud" item: `VcsService` now resolves which `git` executable to invoke rather than always shelling out to a bare `'git'` on `PATH`. A new `findBundledGitBinary()` (used by a new `resolveGitBinary()`, which `runGit`/`runGitConfigGet`/`runGitConfigSet` now all go through instead of the old `isGitAvailable()` + hardcoded `'git'`) checks for a static binary at `bin/<arch>/git` inside GitCloud's own app directory (`OCP\App\IAppManager::getAppPath()`, a new optional constructor dependency defaulting to `null` so none of `VcsServiceTest`'s existing 41 direct `new VcsService(...)` call sites needed to change), matching the server's architecture (`php_uname('m')`, mapped to `amd64`/`arm64`) and Linux only. If no bundled binary is found, present but not executable, or the app path/architecture can't be resolved, it falls back to the existing PATH-based `isGitAvailable()` check exactly as before — bundling is additive, not a replacement, so this ships with zero behavior change for every host that already has a working system git.
+- A bundled binary isn't committed to this repo or fetched automatically. A new explicit `composer fetch-git-static` script (`build/fetch-git-static.php`, pinned version + sha256 checksums in `build/git-static.json`) downloads and verifies the linux/amd64 and linux/arm64 release assets from the companion [`gitcloud-git-static`](https://github.com/zschaub/gitcloud-git-static) project (git 2.55.0, statically linked against musl, scoped to exactly the command set GitCloud needs) into `bin/<arch>/git`, gitignored the same way `vendor/`/`js/`/`css/` already are. Deliberately not wired into `post-install-cmd`/`post-update-cmd`, since it needs outbound network access that a plain `composer install` shouldn't silently require.
+
+Covered by 5 new `VcsServiceTest` cases (prefers a bundled binary when present and executable — proven via a fake script that prints a marker, not a real git binary, to confirm the *resolved path* was actually invoked rather than assuming it from the outcome; falls back to system git when the bundled binary is missing, not executable, or the app path can't be resolved; still returns the existing clear error when neither is available). Full PHPUnit suite (109 tests, up from 104, 252 assertions) verified passing inside the running `stable34` container (synced via `docker cp` + a container restart first); `composer lint` and `composer cs:check` also verified. `composer fetch-git-static` itself was run for real (not just read) against the actual `gitcloud-git-static` v2.55.0-1 release: both checksums verified, both binaries extracted to `bin/<arch>/git`, and the resulting `bin/amd64/git` was executed directly (`--version`) and confirmed to be a genuine statically-linked binary matching the checksummed release.
+
+### Known limitation
+
+- Not yet verified end-to-end against a real running Nextcloud instance with a bundled binary actually in place — i.e. that a live, HTTP-driven commit/rollback through the real app picks up `bin/<arch>/git` over system git when both are present, and that Nextcloud's real `IAppManager::getAppPath()` resolves as expected inside the container. Deliberately not attempted this session per this project's rule against driving the app beyond running PHPUnit. The user should confirm by running `composer fetch-git-static` against a real install, temporarily removing system git (or renaming it off PATH), and confirming commit/rollback still work.
+- Remaining Phase 3 scope for this item (arch-detection failure modes on unsupported platforms, App Store packaging of the fetched `bin/` directory, and updating the Phase 3 kanban board) is tracked separately and not part of this change.
+
 ## [0.2.3] - 2026-08-26
 
 ### Added

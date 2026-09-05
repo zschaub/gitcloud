@@ -1,0 +1,14 @@
+{
+    "repo": "zschaub/gitcloud-git-static",
+    "tag": "v2.55.0-1",
+    "assets": {
+        "amd64": {
+            "file": "git-2.55.0-linux-amd64.tar.gz",
+            "sha256": "466105eac0c1f8e80756c046624951971500a15a9e7c14607abc9792d39ae6dd"
+        },
+        "arm64": {
+            "file": "git-2.55.0-linux-arm64.tar.gz",
+            "sha256": "fa6087ef296881d0665fbe4aa688d10279942da6aeeb7629121f809545fa7054"
+        }
+    }
+}
