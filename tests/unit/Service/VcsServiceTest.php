@@ -13,6 +13,7 @@ use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Files\Folder;
 use OCP\Files\Storage\IStorage;
+use OCP\IAppConfig;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
@@ -1183,5 +1184,128 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertFalse($result['success']);
 		$this->assertSame(VcsService::GIT_NOT_INSTALLED_MESSAGE, $result['output']);
+	}
+
+	/**
+	 * Builds an IAppConfig mock whose git_binary_mode value is fixed to $mode,
+	 * mirroring exactly how VcsService reads it: getValueString(APP_ID, 'git_binary_mode', 'auto').
+	 */
+	private function createAppConfigWithGitBinaryMode(string $mode): IAppConfig {
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->method('getValueString')->with('gitcloud', 'git_binary_mode', 'auto')->willReturn($mode);
+
+		return $appConfig;
+	}
+
+	public function testResolveGitBinaryModeSystemIgnoresBundledBinaryEvenWhenPresent(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($appPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$appConfig = $this->createAppConfigWithGitBinaryMode('system');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager, $appConfig);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertTrue($result['success']);
+		$this->assertStringContainsString('git version', $result['output']);
+		$this->assertStringNotContainsString('BUNDLED_GIT_MARKER', $result['output']);
+	}
+
+	public function testResolveGitBinaryModeStaticUsesBundledBinaryEvenWhenSystemGitAlsoExists(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($appPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$appConfig = $this->createAppConfigWithGitBinaryMode('static');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager, $appConfig);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertTrue($result['success']);
+		$this->assertStringContainsString('BUNDLED_GIT_MARKER', $result['output']);
+	}
+
+	public function testResolveGitBinaryModeStaticFailsWithDedicatedMessageWhenNoBundledBinaryExists(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		// Real app path, but nothing was ever fetched into bin/<arch>/git under it -
+		// "static" mode must not silently fall back to system git even though it's
+		// on PATH in this test environment.
+		$this->tmpAppPath = sys_get_temp_dir() . '/gitcloud-test-app-' . uniqid();
+		mkdir($this->tmpAppPath);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($this->tmpAppPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$appConfig = $this->createAppConfigWithGitBinaryMode('static');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager, $appConfig);
+
+		$result = $service->runGit($this->tmpRepoPath, ['--version']);
+
+		$this->assertFalse($result['success']);
+		$this->assertSame(VcsService::GIT_STATIC_SELECTED_BUT_MISSING_MESSAGE, $result['output']);
+	}
+
+	public function testGetGitBinaryStatusReportsStaticAsResolvedWhenBundledBinaryPreferredInAutoMode(): void {
+		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($appPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$appConfig = $this->createAppConfigWithGitBinaryMode('auto');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager, $appConfig);
+
+		$status = $service->getGitBinaryStatus();
+
+		$this->assertSame('auto', $status['mode']);
+		$this->assertTrue($status['staticGitAvailable']);
+		$this->assertSame('static', $status['resolvedBinary']);
+	}
+
+	public function testGetGitBinaryStatusReportsNoneWhenModeIsStaticAndNoBundledBinaryExists(): void {
+		$this->tmpAppPath = sys_get_temp_dir() . '/gitcloud-test-app-' . uniqid();
+		mkdir($this->tmpAppPath);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($this->tmpAppPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$appConfig = $this->createAppConfigWithGitBinaryMode('static');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory, $appManager, $appConfig);
+
+		$status = $service->getGitBinaryStatus();
+
+		$this->assertSame('static', $status['mode']);
+		$this->assertFalse($status['staticGitAvailable']);
+		$this->assertSame('none', $status['resolvedBinary']);
 	}
 }

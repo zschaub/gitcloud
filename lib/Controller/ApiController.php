@@ -8,6 +8,7 @@ use OCA\GitCloud\AppInfo\Application;
 use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Exception\FileTooLargeException;
 use OCA\GitCloud\Exception\NotLocalStorageException;
+use OCA\GitCloud\Service\GitStaticBinaryService;
 use OCA\GitCloud\Service\VcsService;
 use OCA\GitCloud\Settings\Admin;
 use OCP\AppFramework\Http;
@@ -35,6 +36,7 @@ class ApiController extends OCSController {
 		private IRootFolder $rootFolder,
 		private VcsService $vcsService,
 		private IAppConfig $appConfig,
+		private GitStaticBinaryService $gitStaticBinaryService,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -166,10 +168,13 @@ class ApiController extends OCSController {
 	}
 
 	/**
-	 * Saves the admin-configured max file size and enforcement mode.
+	 * Saves the admin-configured max file size, enforcement mode, and git binary mode.
 	 *
 	 * @param int $maxFileSizeMb Maximum size, in megabytes, a single file may be to be committed.
 	 * @param string $enforcementMode Either "warn" or "block".
+	 * @param string $gitBinaryMode Which git executable to use: "auto" (prefer bundled static git,
+	 *                              fall back to system git), "system" (always use system git), or
+	 *                              "static" (always use the bundled static binary).
 	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{status: string, message: string}, array{}>
 	 *
 	 * 200: Settings saved.
@@ -177,12 +182,15 @@ class ApiController extends OCSController {
 	 */
 	#[AuthorizedAdminSetting(settings: Admin::class)]
 	#[ApiRoute(verb: 'POST', url: '/admin/settings')]
-	public function saveAdminSettings(int $maxFileSizeMb = 0, string $enforcementMode = ''): DataResponse {
-		if ($maxFileSizeMb <= 0 || !in_array($enforcementMode, ['warn', 'block'], true)) {
+	public function saveAdminSettings(int $maxFileSizeMb = 0, string $enforcementMode = '', string $gitBinaryMode = 'auto'): DataResponse {
+		if ($maxFileSizeMb <= 0
+			|| !in_array($enforcementMode, ['warn', 'block'], true)
+			|| !in_array($gitBinaryMode, ['auto', 'system', 'static'], true)
+		) {
 			return new DataResponse(
 				[
 					'status' => 'error',
-					'message' => 'Invalid max file size or enforcement mode.',
+					'message' => 'Invalid max file size, enforcement mode, or git binary mode.',
 				],
 				Http::STATUS_BAD_REQUEST,
 			);
@@ -190,6 +198,7 @@ class ApiController extends OCSController {
 
 		$this->appConfig->setValueInt(Application::APP_ID, 'max_file_size_mb', $maxFileSizeMb);
 		$this->appConfig->setValueString(Application::APP_ID, 'enforcement_mode', $enforcementMode);
+		$this->appConfig->setValueString(Application::APP_ID, 'git_binary_mode', $gitBinaryMode);
 
 		return new DataResponse(
 			[
@@ -197,6 +206,63 @@ class ApiController extends OCSController {
 				'message' => 'Settings saved.',
 			],
 			Http::STATUS_OK,
+		);
+	}
+
+	/**
+	 * Returns the current git-binary configuration for the admin settings page: which
+	 * mode is selected, whether system git is on PATH, whether a bundled static binary
+	 * is already present for this server's architecture, which of the two actually
+	 * resolves right now given the selected mode, and whether a newer static git build
+	 * is pinned by this version of GitCloud than the one currently installed.
+	 *
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, mode: string, systemGitAvailable: bool, staticGitAvailable: bool, resolvedBinary: string, architecture: string|null, installedVersion: string|null, pinnedVersion: string|null, updateAvailable: bool}, array{}>
+	 *
+	 * 200: Status computed and returned.
+	 */
+	#[AuthorizedAdminSetting(settings: Admin::class)]
+	#[ApiRoute(verb: 'GET', url: '/admin/git-binary-status')]
+	public function getGitBinaryStatus(): DataResponse {
+		$vcsStatus = $this->vcsService->getGitBinaryStatus();
+		$staticStatus = $this->gitStaticBinaryService->getStatus();
+
+		return new DataResponse(
+			[
+				'status' => 'success',
+				'mode' => $vcsStatus['mode'],
+				'systemGitAvailable' => $vcsStatus['systemGitAvailable'],
+				'staticGitAvailable' => $vcsStatus['staticGitAvailable'],
+				'resolvedBinary' => $vcsStatus['resolvedBinary'],
+				'architecture' => $staticStatus['architecture'],
+				'installedVersion' => $staticStatus['installedVersion'],
+				'pinnedVersion' => $staticStatus['pinnedVersion'],
+				'updateAvailable' => $staticStatus['updateAvailable'],
+			],
+			Http::STATUS_OK,
+		);
+	}
+
+	/**
+	 * Downloads, checksum-verifies, and installs the static git binary for this
+	 * server's own architecture, so an admin can opt into static git without needing
+	 * shell access to run `composer fetch-git-static` themselves.
+	 *
+	 * @return DataResponse<Http::STATUS_OK, array{status: string, message: string}, array{}>|DataResponse<Http::STATUS_BAD_REQUEST, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Download and install successful.
+	 * 400: The download, verification, or install failed.
+	 */
+	#[AuthorizedAdminSetting(settings: Admin::class)]
+	#[ApiRoute(verb: 'POST', url: '/admin/download-static-git')]
+	public function downloadStaticGit(): DataResponse {
+		$result = $this->gitStaticBinaryService->downloadForCurrentArchitecture();
+
+		return new DataResponse(
+			[
+				'status' => $result['success'] ? 'success' : 'error',
+				'message' => $result['message'],
+			],
+			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
 		);
 	}
 

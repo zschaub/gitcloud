@@ -12,6 +12,7 @@ use OCP\App\IAppManager;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Files\Folder;
+use OCP\IAppConfig;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -24,23 +25,27 @@ class VcsService {
 	private SnapshotMapper $snapshotMapper;
 	private ITimeFactory $timeFactory;
 	private ?IAppManager $appManager;
+	private ?IAppConfig $appConfig;
 	private ?bool $gitAvailable = null;
 	private string|false|null $resolvedGitBinary = null;
 
 	public const GIT_NOT_INSTALLED_MESSAGE = 'git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.';
+	public const GIT_STATIC_SELECTED_BUT_MISSING_MESSAGE = 'Static git was selected in Settings > Administration > GitCloud, but no bundled binary has been downloaded for this server yet. Download it from that settings page, or switch back to "Automatic" or "System git".';
 
 	/**
-	 * $appManager is nullable/optional (rather than required) so every existing direct
-	 * `new VcsService(...)` call site - in tests, which don't care about bundled-binary
-	 * resolution - keeps working unchanged. Nextcloud's DI container still injects the
-	 * real IAppManager for production use regardless of the default, since it resolves
-	 * constructor parameters by type hint rather than by whether one is optional.
+	 * $appManager and $appConfig are nullable/optional (rather than required) so every
+	 * existing direct `new VcsService(...)` call site - in tests, which don't care about
+	 * bundled-binary resolution or the configured git binary mode - keeps working
+	 * unchanged. Nextcloud's DI container still injects the real services for
+	 * production use regardless of the default, since it resolves constructor
+	 * parameters by type hint rather than by whether one is optional.
 	 */
-	public function __construct(LoggerInterface $logger, SnapshotMapper $snapshotMapper, ITimeFactory $timeFactory, ?IAppManager $appManager = null) {
+	public function __construct(LoggerInterface $logger, SnapshotMapper $snapshotMapper, ITimeFactory $timeFactory, ?IAppManager $appManager = null, ?IAppConfig $appConfig = null) {
 		$this->logger = $logger;
 		$this->snapshotMapper = $snapshotMapper;
 		$this->timeFactory = $timeFactory;
 		$this->appManager = $appManager;
+		$this->appConfig = $appConfig;
 	}
 
 	/**
@@ -67,17 +72,35 @@ class VcsService {
 	}
 
 	/**
-	 * Resolves which git executable to invoke: a bundled static binary matching this
-	 * server's architecture if one was fetched into bin/<arch>/git at build time (see
-	 * the companion gitcloud-git-static project), otherwise a system "git" found on
-	 * PATH, otherwise false. Cached per-instance like isGitAvailable().
+	 * Resolves which git executable to invoke, according to the admin-configured
+	 * "git binary mode" (Settings > Administration > GitCloud, appconfig key
+	 * git_binary_mode, default "auto"):
+	 *   - "system": always use a system "git" found on PATH, ignoring any bundled binary.
+	 *   - "static": always use the bundled static binary, even if a system git also
+	 *     exists; false (never falls back) if no bundled binary is present.
+	 *   - "auto" (default, and the only behavior prior to this setting's introduction):
+	 *     prefer a bundled static binary matching this server's architecture if one was
+	 *     fetched into bin/<arch>/git (see the companion gitcloud-git-static project),
+	 *     otherwise fall back to a system "git" on PATH.
+	 * Cached per-instance like isGitAvailable().
 	 */
 	private function resolveGitBinary(): string|false {
 		if ($this->resolvedGitBinary !== null) {
 			return $this->resolvedGitBinary;
 		}
 
+		$mode = $this->getGitBinaryMode();
+
+		if ($mode === 'system') {
+			return $this->resolvedGitBinary = ($this->isGitAvailable() ? 'git' : false);
+		}
+
 		$bundled = $this->findBundledGitBinary();
+
+		if ($mode === 'static') {
+			return $this->resolvedGitBinary = $bundled;
+		}
+
 		if ($bundled !== false) {
 			return $this->resolvedGitBinary = $bundled;
 		}
@@ -86,22 +109,28 @@ class VcsService {
 	}
 
 	/**
+	 * Reads the admin-configured git binary mode, defaulting to "auto" both when unset
+	 * and when no IAppConfig was injected at all (the same nullable-for-tests pattern
+	 * as $appManager - see the constructor's docblock).
+	 */
+	private function getGitBinaryMode(): string {
+		return $this->appConfig?->getValueString(Application::APP_ID, 'git_binary_mode', 'auto') ?? 'auto';
+	}
+
+	/**
 	 * Looks for a bundled static git binary at bin/<arch>/git inside this app's own
 	 * install directory. Only linux/amd64 and linux/arm64 builds are published today
 	 * (see gitcloud-git-static) - any other OS/architecture, or a missing/non-executable
 	 * file, is treated the same as "no bundled binary" and falls back to PATH via
-	 * resolveGitBinary(), never a hard failure.
+	 * resolveGitBinary() (in "auto" mode; "static" mode has no fallback), never a hard
+	 * failure on its own.
 	 */
 	private function findBundledGitBinary(): string|false {
-		if ($this->appManager === null || PHP_OS_FAMILY !== 'Linux') {
+		if ($this->appManager === null) {
 			return false;
 		}
 
-		$arch = match (php_uname('m')) {
-			'x86_64', 'amd64' => 'amd64',
-			'aarch64', 'arm64' => 'arm64',
-			default => null,
-		};
+		$arch = GitArchitecture::detect();
 		if ($arch === null) {
 			return false;
 		}
@@ -117,6 +146,28 @@ class VcsService {
 	}
 
 	/**
+	 * Reports the current git-binary configuration for the admin settings page: which
+	 * mode is selected, whether system git is on PATH, whether a bundled static binary
+	 * exists for this server's architecture, and which of the two actually resolves
+	 * right now given the selected mode ("system", "static", or "none" if unavailable).
+	 * @return array{mode: string, systemGitAvailable: bool, staticGitAvailable: bool, resolvedBinary: string}
+	 */
+	public function getGitBinaryStatus(): array {
+		$resolved = $this->resolveGitBinary();
+
+		return [
+			'mode' => $this->getGitBinaryMode(),
+			'systemGitAvailable' => $this->isGitAvailable(),
+			'staticGitAvailable' => $this->findBundledGitBinary() !== false,
+			'resolvedBinary' => match (true) {
+				$resolved === false => 'none',
+				$resolved === 'git' => 'system',
+				default => 'static',
+			},
+		];
+	}
+
+	/**
 	 * Builds a real error message for a failed proc_open() call (e.g. resource limits,
 	 * a cwd that vanished mid-request, permission issues) from PHP's own last-error
 	 * state, instead of a generic "something went wrong" placeholder. Callers must
@@ -126,6 +177,20 @@ class VcsService {
 	private function describeProcOpenFailure(): string {
 		$lastError = error_get_last();
 		return sprintf('Unable to start the git process: %s', $lastError['message'] ?? 'unknown error');
+	}
+
+	/**
+	 * Picks the clearest "git is unavailable" message for the current situation: a
+	 * dedicated message when the admin explicitly selected "static" mode but never
+	 * downloaded a bundled binary (since the fix is different - download it, rather
+	 * than install system git), or the original generic message otherwise.
+	 */
+	private function gitUnavailableMessage(): string {
+		if ($this->getGitBinaryMode() === 'static' && $this->findBundledGitBinary() === false) {
+			return self::GIT_STATIC_SELECTED_BUT_MISSING_MESSAGE;
+		}
+
+		return self::GIT_NOT_INSTALLED_MESSAGE;
 	}
 
 	/**
@@ -384,8 +449,9 @@ class VcsService {
 	public function runGit(string $cwd, array $args): array {
 		$gitBinary = $this->resolveGitBinary();
 		if ($gitBinary === false) {
-			$this->logger->error('Cannot run git command: ' . self::GIT_NOT_INSTALLED_MESSAGE);
-			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
+			$message = $this->gitUnavailableMessage();
+			$this->logger->error('Cannot run git command: ' . $message);
+			return ['success' => false, 'output' => $message];
 		}
 
 		// Git requires user identity (name/email) to be set before creating a commit.
@@ -463,7 +529,7 @@ class VcsService {
 	public function runGitConfigGet(string $key, string $cwd): array {
 		$gitBinary = $this->resolveGitBinary();
 		if ($gitBinary === false) {
-			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
+			return ['success' => false, 'output' => $this->gitUnavailableMessage()];
 		}
 
 		// Suppressed: a failure here is deliberately captured via error_get_last()
@@ -498,7 +564,7 @@ class VcsService {
 	public function runGitConfigSet(string $key, string $value, string $cwd): array {
 		$gitBinary = $this->resolveGitBinary();
 		if ($gitBinary === false) {
-			return ['success' => false, 'output' => self::GIT_NOT_INSTALLED_MESSAGE];
+			return ['success' => false, 'output' => $this->gitUnavailableMessage()];
 		}
 
 		// Suppressed: a failure here is deliberately captured via error_get_last()

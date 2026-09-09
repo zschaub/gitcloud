@@ -30,6 +30,10 @@ class Admin implements IDelegatedSettings {
 			'enforcement-mode',
 			$this->appConfig->getValueString(Application::APP_ID, 'enforcement_mode', 'block'),
 		);
+		$this->initialState->provideInitialState(
+			'git-binary-mode',
+			$this->appConfig->getValueString(Application::APP_ID, 'git_binary_mode', 'auto'),
+		);
 
 		Util::addScript(Application::APP_ID, Application::APP_ID . '-settings-admin');
 		Util::addStyle(Application::APP_ID, Application::APP_ID . '-settings-admin');
@@ -51,7 +55,7 @@ class Admin implements IDelegatedSettings {
 
 	public function getAuthorizedAppConfig(): array {
 		return [
-			Application::APP_ID => ['/^max_file_size_mb$/', '/^enforcement_mode$/'],
+			Application::APP_ID => ['/^max_file_size_mb$/', '/^enforcement_mode$/', '/^git_binary_mode$/'],
 		];
 	}
 }

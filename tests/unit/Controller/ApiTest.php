@@ -7,6 +7,7 @@ namespace Controller;
 use OCA\GitCloud\AppInfo\Application;
 use OCA\GitCloud\Controller\ApiController;
 use OCA\GitCloud\Db\Snapshot;
+use OCA\GitCloud\Service\GitStaticBinaryService;
 use OCA\GitCloud\Service\VcsService;
 use OCP\Files\Cache\IUpdater;
 use OCP\Files\Folder;
@@ -31,6 +32,14 @@ final class ApiTest extends TestCase {
 		$appConfig->method('getValueString')->willReturn('block');
 
 		return $appConfig;
+	}
+
+	/**
+	 * Default GitStaticBinaryService mock, used by every test that doesn't
+	 * specifically exercise the git-binary-status/download endpoints.
+	 */
+	private function defaultGitStaticBinaryService(): GitStaticBinaryService {
+		return $this->createMock(GitStaticBinaryService::class);
 	}
 
 	public function testCommitChangesSucceedsWithFilesAndMessage(): void {
@@ -82,7 +91,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['file1.txt', 'file2.txt'], 'Initial commit');
 
@@ -147,7 +156,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['folder'], 'Initial commit');
 
@@ -199,7 +208,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->never())->method('commitChanges');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['folder'], 'Initial commit');
 
@@ -213,7 +222,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges();
 
@@ -255,7 +264,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['file1.txt'], '0');
 
@@ -271,7 +280,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['file1.txt'], 'Initial commit');
 
@@ -314,7 +323,7 @@ final class ApiTest extends TestCase {
 			->with('testuser', 'file1.txt')
 			->willReturn([$snapshot]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getSnapshots('file1.txt');
 
@@ -337,7 +346,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getSnapshots();
 
@@ -354,7 +363,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getSnapshots('file1.txt');
 
@@ -390,7 +399,7 @@ final class ApiTest extends TestCase {
 			->with('testuser', 'deleted.txt')
 			->willReturn([$snapshot]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getSnapshots('deleted.txt');
 
@@ -417,7 +426,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('getSnapshotsForFile')->with('testuser', 'nonexistent.txt')->willReturn([]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getSnapshots('nonexistent.txt');
 
@@ -464,7 +473,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully rolled back file1.txt to the selected snapshot.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
@@ -509,7 +518,7 @@ final class ApiTest extends TestCase {
 				'message' => 'File is already at the selected snapshot.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
@@ -549,7 +558,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully rolled back deleted.txt to the selected snapshot.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->rollbackSnapshot('deleted.txt', 1);
 
@@ -562,7 +571,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->rollbackSnapshot();
 
@@ -579,7 +588,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->rollbackSnapshot('file1.txt', 1);
 
@@ -620,7 +629,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', ['readme.txt', 'folder/a.txt'])
 			->willReturn(['readme.txt' => 'Unchanged', 'folder/a.txt' => 'Modified']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getDirectories();
 
@@ -667,7 +676,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', ['readme.txt'])
 			->willReturn(['readme.txt' => 'Unchanged']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getDirectories();
 
@@ -719,7 +728,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', [])
 			->willReturn([]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getDirectories();
 
@@ -787,7 +796,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', ['folder/a.txt'])
 			->willReturn(['folder/a.txt' => 'Unchanged']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getDirectories();
 
@@ -837,7 +846,7 @@ final class ApiTest extends TestCase {
 			->with('/data/testuser/files', ['readme.txt'])
 			->willReturn(['readme.txt' => 'Unchanged']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getDirectories();
 
@@ -860,7 +869,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getDirectories();
 
@@ -909,7 +918,7 @@ final class ApiTest extends TestCase {
 				'gitStatus' => 'Clean',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getStatus();
 
@@ -960,7 +969,7 @@ final class ApiTest extends TestCase {
 				'gitStatus' => 'Clean',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getStatus();
 
@@ -1002,7 +1011,7 @@ final class ApiTest extends TestCase {
 				'gitStatus' => 'Uninitialized',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getStatus();
 
@@ -1053,7 +1062,7 @@ final class ApiTest extends TestCase {
 				'gitStatus' => 'Modified',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getStatus('folder');
 
@@ -1073,7 +1082,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->getStatus();
 
@@ -1115,7 +1124,7 @@ final class ApiTest extends TestCase {
 		$appConfig->method('getValueInt')->willReturn(100);
 		$appConfig->method('getValueString')->willReturn('block');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['big.txt'], 'Initial commit');
 
@@ -1158,7 +1167,7 @@ final class ApiTest extends TestCase {
 		$appConfig->method('getValueInt')->willReturn(100);
 		$appConfig->method('getValueString')->willReturn('warn');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['big.txt'], 'Initial commit');
 
@@ -1208,7 +1217,7 @@ final class ApiTest extends TestCase {
 		$appConfig->method('getValueInt')->willReturn(100);
 		$appConfig->method('getValueString')->willReturn('warn');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['big.txt'], 'Initial commit', confirmed: true);
 
@@ -1250,7 +1259,7 @@ final class ApiTest extends TestCase {
 		$appConfig->method('getValueInt')->willReturn(100);
 		$appConfig->method('getValueString')->willReturn('block');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['big.txt'], 'Initial commit', confirmed: true);
 
@@ -1294,7 +1303,7 @@ final class ApiTest extends TestCase {
 				'message' => 'Successfully staged and committed changes.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->commitChanges(['file1.txt'], 'Initial commit');
 
@@ -1312,15 +1321,21 @@ final class ApiTest extends TestCase {
 		$appConfig->expects($this->once())
 			->method('setValueInt')
 			->with(Application::APP_ID, 'max_file_size_mb', 50);
-		$appConfig->expects($this->once())
+
+		$setStringCalls = [];
+		$appConfig->expects($this->exactly(2))
 			->method('setValueString')
-			->with(Application::APP_ID, 'enforcement_mode', 'warn');
+			->willReturnCallback(function (string $app, string $key, string $value) use (&$setStringCalls): bool {
+				$setStringCalls[$key] = $value;
+				return true;
+			});
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
-		$response = $controller->saveAdminSettings(50, 'warn');
+		$response = $controller->saveAdminSettings(50, 'warn', 'static');
 
 		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertSame(['enforcement_mode' => 'warn', 'git_binary_mode' => 'static'], $setStringCalls);
 	}
 
 	public function testSaveAdminSettingsRejectsInvalidEnforcementMode(): void {
@@ -1333,9 +1348,27 @@ final class ApiTest extends TestCase {
 		$appConfig->expects($this->never())->method('setValueInt');
 		$appConfig->expects($this->never())->method('setValueString');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
 		$response = $controller->saveAdminSettings(50, 'foo');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testSaveAdminSettingsRejectsInvalidGitBinaryMode(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$appConfig = $this->createMock(IAppConfig::class);
+		$appConfig->expects($this->never())->method('setValueInt');
+		$appConfig->expects($this->never())->method('setValueString');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
+
+		$response = $controller->saveAdminSettings(50, 'block', 'bogus');
 
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(400, $response->getStatus());
@@ -1351,9 +1384,119 @@ final class ApiTest extends TestCase {
 		$appConfig->expects($this->never())->method('setValueInt');
 		$appConfig->expects($this->never())->method('setValueString');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig);
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $appConfig, $this->defaultGitStaticBinaryService());
 
 		$response = $controller->saveAdminSettings(0, 'block');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testGetGitBinaryStatusReturnsCombinedStatus(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getGitBinaryStatus')->willReturn([
+			'mode' => 'auto',
+			'systemGitAvailable' => true,
+			'staticGitAvailable' => false,
+			'resolvedBinary' => 'system',
+		]);
+
+		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
+		$gitStaticBinaryService->method('getStatus')->willReturn([
+			'architecture' => 'amd64',
+			'staticGitPresent' => false,
+			'installedVersion' => null,
+			'pinnedVersion' => 'v2.55.0-1',
+			'updateAvailable' => false,
+		]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $gitStaticBinaryService);
+
+		$response = $controller->getGitBinaryStatus();
+		$data = $response->getData();
+
+		$this->assertEquals('success', $data['status']);
+		$this->assertSame('auto', $data['mode']);
+		$this->assertTrue($data['systemGitAvailable']);
+		$this->assertFalse($data['staticGitAvailable']);
+		$this->assertSame('system', $data['resolvedBinary']);
+		$this->assertSame('amd64', $data['architecture']);
+		$this->assertNull($data['installedVersion']);
+		$this->assertSame('v2.55.0-1', $data['pinnedVersion']);
+		$this->assertFalse($data['updateAvailable']);
+	}
+
+	public function testGetGitBinaryStatusReportsUpdateAvailable(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('getGitBinaryStatus')->willReturn([
+			'mode' => 'static',
+			'systemGitAvailable' => false,
+			'staticGitAvailable' => true,
+			'resolvedBinary' => 'static',
+		]);
+
+		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
+		$gitStaticBinaryService->method('getStatus')->willReturn([
+			'architecture' => 'amd64',
+			'staticGitPresent' => true,
+			'installedVersion' => 'v2.54.0-1',
+			'pinnedVersion' => 'v2.55.0-1',
+			'updateAvailable' => true,
+		]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $gitStaticBinaryService);
+
+		$response = $controller->getGitBinaryStatus();
+		$data = $response->getData();
+
+		$this->assertSame('v2.54.0-1', $data['installedVersion']);
+		$this->assertSame('v2.55.0-1', $data['pinnedVersion']);
+		$this->assertTrue($data['updateAvailable']);
+	}
+
+	public function testDownloadStaticGitReturnsSuccessResponse(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
+		$gitStaticBinaryService->method('downloadForCurrentArchitecture')->willReturn([
+			'success' => true,
+			'message' => 'Downloaded static git v2.55.0-1 for amd64.',
+		]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $gitStaticBinaryService);
+
+		$response = $controller->downloadStaticGit();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals(200, $response->getStatus());
+	}
+
+	public function testDownloadStaticGitReturnsErrorResponseWhenDownloadFails(): void {
+		$request = $this->createMock(IRequest::class);
+		$userSession = $this->createMock(IUserSession::class);
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
+		$gitStaticBinaryService->method('downloadForCurrentArchitecture')->willReturn([
+			'success' => false,
+			'message' => 'Checksum verification failed.',
+		]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $gitStaticBinaryService);
+
+		$response = $controller->downloadStaticGit();
 
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(400, $response->getStatus());
@@ -1388,7 +1531,7 @@ final class ApiTest extends TestCase {
 				'message' => 'All commit history has been permanently deleted.',
 			]);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->deleteHistory();
 
@@ -1404,7 +1547,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->deleteHistory();
 
@@ -1432,7 +1575,7 @@ final class ApiTest extends TestCase {
 			->with('testuser', 'folder/a.txt')
 			->willReturn(['success' => true, 'message' => 'Stopped tracking folder/a.txt.']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackFile('folder/a.txt');
 
@@ -1447,7 +1590,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->never())->method('untrackFile');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackFile('');
 
@@ -1465,7 +1608,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->never())->method('untrackFile');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackFile('folder/a.txt');
 
@@ -1490,7 +1633,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('untrackFile')->willReturn(['success' => false, 'message' => 'not tracked.']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackFile('untracked.txt');
 
@@ -1518,7 +1661,7 @@ final class ApiTest extends TestCase {
 			->with('testuser', 'docs')
 			->willReturn(['success' => true, 'message' => 'Stopped tracking 2 file(s) in docs.']);
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackDirectory('docs');
 
@@ -1533,7 +1676,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->never())->method('untrackDirectory');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackDirectory('');
 
@@ -1551,7 +1694,7 @@ final class ApiTest extends TestCase {
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->expects($this->never())->method('untrackDirectory');
 
-		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig());
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
 		$response = $controller->untrackDirectory('docs');
 

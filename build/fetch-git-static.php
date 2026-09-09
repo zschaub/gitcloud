@@ -68,6 +68,10 @@ foreach ($pin['assets'] as $arch => $asset) {
 
 		copy($extractedDir . '/git', $binDir . '/git');
 		chmod($binDir . '/git', 0755);
+		// Read by GitStaticBinaryService::getStatus() to tell "up to date" apart
+		// from "installed under an older pin, before GitCloud itself was upgraded" -
+		// see that class for the "Check for updates" feature this backs.
+		file_put_contents($binDir . '/git.version', $pin['tag']);
 		// Carried along for GPL-2.0 compliance and build provenance, not read by
 		// VcsService at runtime - only bin/<arch>/git itself is ever executed.
 		copy($extractedDir . '/COPYING', $binDir . '/COPYING');
