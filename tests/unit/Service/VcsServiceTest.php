@@ -19,18 +19,56 @@ use Psr\Log\LoggerInterface;
 
 final class VcsServiceTest extends TestCase {
 	private ?string $tmpRepoPath = null;
+	private ?string $tmpHomePath = null;
 	private ?string $tmpAppPath = null;
 
 	protected function tearDown(): void {
-		if ($this->tmpRepoPath !== null && is_dir($this->tmpRepoPath)) {
-			exec('rm -rf ' . escapeshellarg($this->tmpRepoPath));
+		if ($this->tmpHomePath !== null && is_dir($this->tmpHomePath)) {
+			exec('rm -rf ' . escapeshellarg($this->tmpHomePath));
 		}
+		$this->tmpHomePath = null;
 		$this->tmpRepoPath = null;
 
 		if ($this->tmpAppPath !== null && is_dir($this->tmpAppPath)) {
 			exec('rm -rf ' . escapeshellarg($this->tmpAppPath));
 		}
 		$this->tmpAppPath = null;
+	}
+
+	/**
+	 * Creates a temporary stand-in for a user's home directory laid out the way
+	 * Nextcloud's really is - `<home>/files` as the working tree, with room for
+	 * VcsService's own `<home>/gitcloud` repository directory beside it - and returns
+	 * the working tree path. tearDown() removes the whole home directory, so the
+	 * repository is cleaned up along with it.
+	 */
+	private function createWorkingTree(): string {
+		$this->tmpHomePath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpHomePath);
+		$workingTree = $this->tmpHomePath . '/files';
+		mkdir($workingTree);
+
+		return $workingTree;
+	}
+
+	/**
+	 * Shell prefix for running raw git commands against the test repository the same way
+	 * VcsService does: the repository directory sits beside the working tree rather than
+	 * inside it, so both `--git-dir` and `--work-tree` have to be spelled out.
+	 */
+	private function gitCommand(): string {
+		return 'git --git-dir=' . escapeshellarg($this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME)
+			. ' --work-tree=' . escapeshellarg($this->tmpRepoPath)
+			. ' -C ' . escapeshellarg($this->tmpRepoPath);
+	}
+
+	/**
+	 * Initializing the repository deliberately passes only `--git-dir`: adding
+	 * `--work-tree` to `git init` produces an incomplete repository, the same constraint
+	 * VcsService::ensureRepository() documents.
+	 */
+	private function gitInitCommand(): string {
+		return 'git --git-dir=' . escapeshellarg($this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME) . ' init -q';
 	}
 
 	/**
@@ -67,8 +105,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testCommitChangesRecordsSnapshotWithHeadCommitHashAndNoParent(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
 
 		$logger = $this->createMock(LoggerInterface::class);
@@ -98,8 +135,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testCommitChangesUsesMostRecentSnapshotForSameFileIdAsParent(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
 
 		$logger = $this->createMock(LoggerInterface::class);
@@ -127,8 +163,7 @@ final class VcsServiceTest extends TestCase {
 		// A file deleted and later recreated at the same path gets a new fileid
 		// from Nextcloud's filecache; the new commit must not be misattributed
 		// as a continuation of the old file's history just because the path matches.
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello again');
 
 		$logger = $this->createMock(LoggerInterface::class);
@@ -230,21 +265,20 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRollbackToSnapshotRestoresFileAndRecordsSnapshot(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'original');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' rev-parse HEAD', $headOutput);
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' rev-parse HEAD', $headOutput);
 		$originalCommitHash = trim($headOutput[0]);
 
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'changed');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Second commit"');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Second commit"');
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -286,9 +320,8 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRollbackToSnapshotFailsWhenSnapshotBelongsToDifferentUser(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -311,9 +344,8 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRollbackToSnapshotFailsWhenSnapshotNotFound(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -329,8 +361,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetDirectoryStatusSumsSizeOfGivenFilesOnly(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		mkdir($this->tmpRepoPath . '/folder');
 		file_put_contents($this->tmpRepoPath . '/folder/a.txt', str_repeat('a', 10));
 		file_put_contents($this->tmpRepoPath . '/folder/b.txt', str_repeat('b', 20));
@@ -348,8 +379,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetDirectoryStatusReturnsUninitializedWhenNoGitRepository(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		file_put_contents($this->tmpRepoPath . '/a.txt', 'hello');
 
 		$logger = $this->createMock(LoggerInterface::class);
@@ -364,17 +394,16 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetDirectoryStatusReportsCleanWhenOnlyFilesOutsideDirectoryAreModified(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		mkdir($this->tmpRepoPath . '/folder');
 		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'original');
 		file_put_contents($this->tmpRepoPath . '/other.txt', 'original');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add .');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		// Modify a file outside the scoped directory only.
 		file_put_contents($this->tmpRepoPath . '/other.txt', 'changed');
@@ -391,16 +420,15 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetDirectoryStatusReportsModifiedWhenScopedFileIsChanged(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		mkdir($this->tmpRepoPath . '/folder');
 		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'original');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add .');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'changed');
 
@@ -416,17 +444,16 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetFileStatusesMarksOnlyChangedFilesAsModified(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		mkdir($this->tmpRepoPath . '/folder');
 		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'original');
 		file_put_contents($this->tmpRepoPath . '/folder/b.txt', 'original');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add .');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		file_put_contents($this->tmpRepoPath . '/folder/a.txt', 'changed');
 
@@ -444,17 +471,16 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetFileStatusesHandlesFilePathsContainingSpaces(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		mkdir($this->tmpRepoPath . '/Test Folder');
 		file_put_contents($this->tmpRepoPath . '/Test Folder/status test.txt', 'original');
 		file_put_contents($this->tmpRepoPath . '/Test Folder/unchanged.txt', 'original');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add .');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		file_put_contents($this->tmpRepoPath . '/Test Folder/status test.txt', 'changed');
 
@@ -477,21 +503,20 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetFileStatusesHandlesRenamedFileWithoutCorruptingOtherEntries(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		file_put_contents($this->tmpRepoPath . '/a.txt', 'original');
 		file_put_contents($this->tmpRepoPath . '/b.txt', 'original');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add .');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add .');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		// `git mv` stages the rename immediately, so `git status --porcelain -z`
 		// emits "R  renamed.txt\0a.txt\0" — the extra NUL field for the old path
 		// has no "XY " status prefix and must not be parsed as its own entry.
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' mv a.txt renamed.txt');
+		exec($this->gitCommand() . ' mv a.txt renamed.txt');
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -507,8 +532,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testGetFileStatusesReturnsUnchangedWhenNoGitRepository(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		file_put_contents($this->tmpRepoPath . '/a.txt', 'hello');
 
 		$logger = $this->createMock(LoggerInterface::class);
@@ -707,14 +731,13 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testDeleteHistoryRemovesGitDirectoryAndReinitializes(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -726,21 +749,21 @@ final class VcsServiceTest extends TestCase {
 		$result = $service->deleteHistory($this->tmpRepoPath, 'testuser');
 
 		$this->assertTrue($result['success']);
-		$this->assertDirectoryExists($this->tmpRepoPath . '/.git');
+		$this->assertDirectoryExists($this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME);
+		$this->assertDirectoryDoesNotExist($this->tmpRepoPath . '/.git');
 
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' rev-parse HEAD 2>&1', $output, $exitCode);
+		exec($this->gitCommand() . ' rev-parse HEAD 2>&1', $output, $exitCode);
 		$this->assertNotSame(0, $exitCode);
 	}
 
 	public function testDeleteHistoryLeavesWorkingTreeFilesIntact(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -766,14 +789,13 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testCreateHistoryBackupProducesExtractableArchiveContainingGitDirectory(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -788,7 +810,7 @@ final class VcsServiceTest extends TestCase {
 
 		exec('tar -tzf ' . escapeshellarg($result['path']), $entries, $exitCode);
 		$this->assertSame(0, $exitCode);
-		$this->assertContains('.git/', $entries);
+		$this->assertContains(VcsService::GIT_DIRECTORY_NAME . '/', $entries);
 
 		unlink($result['path']);
 	}
@@ -806,8 +828,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testCreateHistoryBackupFailsWhenNoHistoryExistsYet(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -821,15 +842,14 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testAutoCommitDeleteStagesRemovalAndRecordsDeletedSnapshot(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		// The file is already gone from the working tree by the time GitCloud
 		// reacts to the delete event - `git add` on a missing path stages the
@@ -863,13 +883,12 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertTrue($result['success']);
 
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' log -1 --pretty=%s', $logOutput);
+		exec($this->gitCommand() . ' log -1 --pretty=%s', $logOutput);
 		$this->assertSame('Auto-commit: deleted file1.txt', $logOutput[0]);
 	}
 
 	public function testAutoCommitDeleteFailsWhenRepositoryNotInitialized(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -884,11 +903,10 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testAutoCommitDeleteFailsWhenNothingStagedForThatPath(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		// Nothing was ever committed at this path, so `git add` on it stages nothing.
 		$logger = $this->createMock(LoggerInterface::class);
@@ -904,15 +922,14 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testAutoCommitRenameStagesBothPathsAndRecordsCommittedSnapshotAtNewPath(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		file_put_contents($this->tmpRepoPath . '/old.txt', 'hello');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add old.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' add old.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
 
 		// Nextcloud's rename/move has already completed on disk by the time this
 		// runs - there is no old.txt left to `git mv` from.
@@ -944,13 +961,12 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertTrue($result['success']);
 
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' log -1 --pretty=%s', $logOutput);
+		exec($this->gitCommand() . ' log -1 --pretty=%s', $logOutput);
 		$this->assertSame('Auto-commit: renamed old.txt to new.txt', $logOutput[0]);
 	}
 
 	public function testAutoCommitRenameFailsWhenRepositoryNotInitialized(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -965,17 +981,16 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testAutoCommitRestoreStagesFileAndRecordsCommittedSnapshotClearingDeletedStatus(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
 
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' rm -q file1.txt');
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Auto-commit: deleted file1.txt"');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' rm -q file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Auto-commit: deleted file1.txt"');
 
 		// Nextcloud's trash restore has already put the file back on disk by the
 		// time this runs, but git's index still has it removed from the earlier
@@ -1009,13 +1024,12 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertTrue($result['success']);
 
-		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' log -1 --pretty=%s', $logOutput);
+		exec($this->gitCommand() . ' log -1 --pretty=%s', $logOutput);
 		$this->assertSame('Auto-commit: restored file1.txt', $logOutput[0]);
 	}
 
 	public function testAutoCommitRestoreFailsWhenRepositoryNotInitialized(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$timeFactory = $this->createMock(ITimeFactory::class);
@@ -1064,8 +1078,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRunGitReturnsClearErrorWhenGitBinaryNotOnPath(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$logger = $this->createMock(LoggerInterface::class);
 		$logger->expects($this->once())->method('error');
@@ -1087,8 +1100,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testCommitChangesFailsWithClearErrorWhenGitBinaryNotOnPath(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
 
 		$logger = $this->createMock(LoggerInterface::class);
@@ -1127,8 +1139,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRunGitPrefersBundledBinaryForCurrentArchitectureWhenPresentAndExecutable(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
 
@@ -1148,8 +1159,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRunGitFallsBackToSystemGitWhenBundledBinaryDoesNotExist(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		// Real app path, but nothing was ever fetched into bin/<arch>/git under it.
 		$this->tmpAppPath = sys_get_temp_dir() . '/gitcloud-test-app-' . uniqid();
@@ -1171,8 +1181,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRunGitFallsBackToSystemGitWhenBundledBinaryExistsButIsNotExecutable(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER', executable: false);
 
@@ -1193,8 +1202,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRunGitFallsBackToSystemGitWhenAppPathCannotBeResolved(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$appManager = $this->createMock(IAppManager::class);
 		$appManager->method('getAppPath')->with('gitcloud')->willThrowException(new AppPathNotFoundException());
@@ -1212,8 +1220,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testRunGitStillFailsWithClearErrorWhenNeitherBundledNorSystemGitIsAvailable(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		// Real app path, but nothing was ever fetched into bin/<arch>/git under it,
 		// combined with no system git on PATH - the worst case, still a clear error.
@@ -1253,8 +1260,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testResolveGitBinaryModeSystemIgnoresBundledBinaryEvenWhenPresent(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
 
@@ -1276,8 +1282,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testResolveGitBinaryModeStaticUsesBundledBinaryEvenWhenSystemGitAlsoExists(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		$appPath = $this->createFakeBundledGitBinary('BUNDLED_GIT_MARKER');
 
@@ -1298,8 +1303,7 @@ final class VcsServiceTest extends TestCase {
 	}
 
 	public function testResolveGitBinaryModeStaticFailsWithDedicatedMessageWhenNoBundledBinaryExists(): void {
-		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
-		mkdir($this->tmpRepoPath);
+		$this->tmpRepoPath = $this->createWorkingTree();
 
 		// Real app path, but nothing was ever fetched into bin/<arch>/git under it -
 		// "static" mode must not silently fall back to system git even though it's
@@ -1362,5 +1366,66 @@ final class VcsServiceTest extends TestCase {
 		$this->assertSame('static', $status['mode']);
 		$this->assertFalse($status['staticGitAvailable']);
 		$this->assertSame('none', $status['resolvedBinary']);
+	}
+
+	public function testResolveGitDirectoryPutsTheRepositoryBesideTheWorkingTreeNotInsideIt(): void {
+		$service = new VcsService(
+			$this->createMock(LoggerInterface::class),
+			$this->createMock(SnapshotMapper::class),
+			$this->createMock(ITimeFactory::class),
+		);
+
+		$gitDirectory = $service->resolveGitDirectory('/var/www/html/data/alice/files');
+
+		$this->assertSame('/var/www/html/data/alice/gitcloud', $gitDirectory);
+		// The whole point of the relocation: nothing under the user's own files directory,
+		// which is what Nextcloud exposes over the Files app, WebDAV and sync clients.
+		$this->assertStringNotContainsString('/files/', $gitDirectory);
+	}
+
+	public function testCommitChangesCreatesTheRepositoryBesideTheWorkingTreeLeavingNoDotGitInIt(): void {
+		$this->tmpRepoPath = $this->createWorkingTree();
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->willReturn(null);
+		$snapshotMapper->method('insert')->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 7]], 'first', 'testuser');
+
+		$this->assertTrue($result['success']);
+		$this->assertDirectoryExists($this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME);
+		$this->assertDirectoryDoesNotExist($this->tmpRepoPath . '/.git');
+		$this->assertFileDoesNotExist($this->tmpRepoPath . '/.git');
+	}
+
+	public function testCommitChangesWritesItsIdentityConfigIntoTheRelocatedRepositoryNotTheUsersFiles(): void {
+		$this->tmpRepoPath = $this->createWorkingTree();
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->willReturn(null);
+		$snapshotMapper->method('insert')->willReturnArgument(0);
+
+		$service = new VcsService(
+			$this->createMock(LoggerInterface::class),
+			$snapshotMapper,
+			$this->createMock(ITimeFactory::class),
+		);
+
+		$this->assertTrue($service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 7]], 'first', 'testuser')['success']);
+
+		// Identity setup goes through runGitConfigGet/Set, which must also be pointed at
+		// the relocated repository - otherwise it would silently read and write the
+		// server-wide git config instead of this user's repository.
+		$config = file_get_contents($this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME . '/config');
+		$this->assertStringContainsString('[user]', $config);
+		$this->assertStringContainsString('bare = false', $config);
 	}
 }

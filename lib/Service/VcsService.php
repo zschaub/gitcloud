@@ -29,6 +29,19 @@ class VcsService {
 	private ?bool $gitAvailable = null;
 	private string|false|null $resolvedGitBinary = null;
 
+	/**
+	 * Name of the per-user directory holding GitCloud's Git repository, resolved by
+	 * resolveGitDirectory() as a sibling of the user's "files" directory.
+	 */
+	public const GIT_DIRECTORY_NAME = 'gitcloud';
+
+	/**
+	 * Legacy location of that repository, inside the user's own files directory, used
+	 * by every release up to and including 0.2.7. Kept so the one-time repair step can
+	 * still find and relocate an existing repository.
+	 */
+	public const LEGACY_GIT_DIRECTORY_NAME = '.git';
+
 	public const GIT_NOT_INSTALLED_MESSAGE = 'git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.';
 	public const GIT_STATIC_SELECTED_BUT_MISSING_MESSAGE = 'Static git was selected in Settings > Administration > GitCloud, but no bundled binary has been downloaded for this server yet. Download it from that settings page, or switch back to "Automatic" or "System git".';
 
@@ -272,7 +285,7 @@ class VcsService {
 	 * @return array{success: bool, message: string}
 	 */
 	public function autoCommitDelete(string $repositoryPath, string $relativeFilePath, int $fileId, string $userId): array {
-		if (!is_dir($repositoryPath) || !is_dir($repositoryPath . '/.git')) {
+		if (!is_dir($repositoryPath) || !$this->hasRepository($repositoryPath)) {
 			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
 		}
 
@@ -321,7 +334,7 @@ class VcsService {
 	 * @return array{success: bool, message: string}
 	 */
 	public function autoCommitRename(string $repositoryPath, string $oldRelativePath, string $newRelativePath, int $fileId, string $userId): array {
-		if (!is_dir($repositoryPath) || !is_dir($repositoryPath . '/.git')) {
+		if (!is_dir($repositoryPath) || !$this->hasRepository($repositoryPath)) {
 			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
 		}
 
@@ -370,7 +383,7 @@ class VcsService {
 	 * @return array{success: bool, message: string}
 	 */
 	public function autoCommitRestore(string $repositoryPath, string $relativeFilePath, int $fileId, string $userId): array {
-		if (!is_dir($repositoryPath) || !is_dir($repositoryPath . '/.git')) {
+		if (!is_dir($repositoryPath) || !$this->hasRepository($repositoryPath)) {
 			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
 		}
 
@@ -425,18 +438,68 @@ class VcsService {
 	}
 
 	/**
+	 * Resolves the directory holding GitCloud's Git repository for the working tree at
+	 * $repositoryPath. It deliberately sits *next to* the user's "files" directory rather
+	 * than inside it as a `.git` folder, so it is not part of the user's Nextcloud storage
+	 * at all: invisible to the Files app, WebDAV, mobile apps and sync clients, and so
+	 * impossible to browse into, delete, rename or overwrite through any of them. This
+	 * mirrors core's own per-user siblings of `files` (`files_trashbin`, `files_versions`,
+	 * `uploads`, ...). Git is pointed at it explicitly via `--git-dir`/`--work-tree`.
+	 */
+	public function resolveGitDirectory(string $repositoryPath): string {
+		return rtrim(dirname($repositoryPath), '/') . '/' . self::GIT_DIRECTORY_NAME;
+	}
+
+	/**
+	 * Whether a GitCloud repository has been initialized for the working tree at
+	 * $repositoryPath. Replaces the older `is_dir($repositoryPath . '/.git')` check
+	 * from when the repository still lived inside the user's files directory.
+	 */
+	private function hasRepository(string $repositoryPath): bool {
+		return is_dir($this->resolveGitDirectory($repositoryPath));
+	}
+
+	/**
+	 * Global git flags locating the out-of-working-tree repository for $cwd. Returns an
+	 * empty list when $cwd has no GitCloud repository beside it - notably for the '/' used
+	 * to read system-wide identity config - so those invocations keep behaving exactly as
+	 * they did when the repository lived in the working tree.
+	 * @return list<string>
+	 */
+	private function gitLocationArgs(string $cwd): array {
+		$gitDirectory = $this->resolveGitDirectory($cwd);
+		if (!is_dir($gitDirectory)) {
+			return [];
+		}
+
+		return ['--git-dir=' . $gitDirectory, '--work-tree=' . $cwd];
+	}
+
+	/**
 	 * @return array{success: bool, message?: string}
 	 */
 	private function ensureRepository(string $repositoryPath): array {
-		if (is_dir($repositoryPath . '/.git')) {
+		if ($this->hasRepository($repositoryPath)) {
 			return ['success' => true];
 		}
 
-		$initResult = $this->runGit($repositoryPath, ['init']);
+		// `--git-dir` is passed explicitly here rather than via gitLocationArgs(), which
+		// only applies once the directory exists. `--work-tree` is deliberately *not*
+		// passed: combining it with `init` produces an incomplete repository (no HEAD,
+		// no objects/) - verified against git 2.55.0. Every later invocation supplies
+		// both flags, which is what actually binds the repository to its working tree.
+		$gitDirectory = $this->resolveGitDirectory($repositoryPath);
+		$initResult = $this->runGit($repositoryPath, ['--git-dir=' . $gitDirectory, 'init']);
 		if (!$initResult['success']) {
 			$this->logger->warning(sprintf('git init failed: %s', $initResult['output']));
 			return ['success' => false, 'message' => sprintf('Failed to initialize repository: %s', $initResult['output'])];
 		}
+
+		// Initializing with only `--git-dir` leaves core.bare = true. Every command
+		// GitCloud runs passes an explicit `--work-tree` and works regardless, but
+		// clearing it keeps a freshly initialized repository identical to one relocated
+		// out of a user's files directory by the repair step.
+		$this->runGitConfigSet('core.bare', 'false', $repositoryPath);
 
 		return ['success' => true];
 	}
@@ -494,7 +557,7 @@ class VcsService {
 		// in describeProcOpenFailure() below rather than left to PHP's own warning.
 		error_clear_last();
 		$process = @proc_open(
-			array_merge([$gitBinary], $args),
+			array_merge([$gitBinary], $this->gitLocationArgs($cwd), $args),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
@@ -536,7 +599,7 @@ class VcsService {
 		// in describeProcOpenFailure() below rather than left to PHP's own warning.
 		error_clear_last();
 		$process = @proc_open(
-			array_merge([$gitBinary, 'config', '--get', $key]),
+			array_merge([$gitBinary], $this->gitLocationArgs($cwd), ['config', '--get', $key]),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
@@ -571,7 +634,7 @@ class VcsService {
 		// in describeProcOpenFailure() below rather than left to PHP's own warning.
 		error_clear_last();
 		$process = @proc_open(
-			array_merge([$gitBinary, 'config', $key, $value]),
+			array_merge([$gitBinary], $this->gitLocationArgs($cwd), ['config', $key, $value]),
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
@@ -614,7 +677,7 @@ class VcsService {
 		}
 
 		$gitStatus = 'Uninitialized';
-		if (is_dir($repositoryPath . '/.git')) {
+		if ($this->hasRepository($repositoryPath)) {
 			if (empty($relativeFilePaths)) {
 				$gitStatus = 'Clean';
 			} else {
@@ -639,7 +702,7 @@ class VcsService {
 	public function getFileStatuses(string $repositoryPath, array $relativeFilePaths): array {
 		$statuses = array_fill_keys($relativeFilePaths, 'Unchanged');
 
-		if (empty($relativeFilePaths) || !is_dir($repositoryPath . '/.git')) {
+		if (empty($relativeFilePaths) || !$this->hasRepository($repositoryPath)) {
 			return $statuses;
 		}
 
@@ -694,7 +757,7 @@ class VcsService {
 			return ['success' => false, 'message' => 'Repository path does not exist.'];
 		}
 
-		if (!is_dir($repositoryPath . '/.git')) {
+		if (!$this->hasRepository($repositoryPath)) {
 			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
 		}
 
@@ -911,9 +974,10 @@ class VcsService {
 
 	/**
 	 * Irreversibly wipes all Git history for the repository rooted at $repositoryPath
-	 * by deleting .git and reinitializing an empty repository. Working-tree files are
-	 * left untouched, since $repositoryPath is the user's own Nextcloud home directory
-	 * and .git holds only history, not the live file content. Also removes every
+	 * by deleting its Git directory (see resolveGitDirectory()) and reinitializing an
+	 * empty repository. Working-tree files are left untouched, since $repositoryPath is
+	 * the user's own Nextcloud home directory and the Git directory holds only history,
+	 * not the live file content. Also removes every
 	 * gitcloud_snapshots row for $userId, since their commit hashes become invalid
 	 * once history is wiped.
 	 *
@@ -928,8 +992,8 @@ class VcsService {
 			return ['success' => false, 'message' => 'Repository path does not exist.'];
 		}
 
-		if (is_dir($repositoryPath . '/.git')) {
-			$this->removeDirectoryRecursive($repositoryPath . '/.git');
+		if ($this->hasRepository($repositoryPath)) {
+			$this->removeDirectoryRecursive($this->resolveGitDirectory($repositoryPath));
 		}
 
 		$initResult = $this->ensureRepository($repositoryPath);
@@ -944,7 +1008,7 @@ class VcsService {
 	}
 
 	/**
-	 * Creates a downloadable backup of the repository's Git history (the .git
+	 * Creates a downloadable backup of the repository's Git history (the Git
 	 * directory only - not the working tree, since the live files are already
 	 * backed up by whatever backs the user's Nextcloud storage) as a gzipped
 	 * tarball at a temporary path. The caller is responsible for streaming and
@@ -957,17 +1021,18 @@ class VcsService {
 			return ['success' => false, 'message' => 'Repository path does not exist.'];
 		}
 
-		if (!is_dir($repositoryPath . '/.git')) {
+		if (!$this->hasRepository($repositoryPath)) {
 			return ['success' => false, 'message' => 'No commit history has been created yet.'];
 		}
 
+		$gitDirectory = $this->resolveGitDirectory($repositoryPath);
 		$backupPath = sys_get_temp_dir() . '/gitcloud-backup-' . bin2hex(random_bytes(8)) . '.tar.gz';
 
 		// Suppressed: a failure here is deliberately captured via error_get_last()
 		// below rather than left to PHP's own warning, mirroring runGit()'s pattern.
 		error_clear_last();
 		$process = @proc_open(
-			['tar', '-czf', $backupPath, '-C', $repositoryPath, '.git'],
+			['tar', '-czf', $backupPath, '-C', dirname($gitDirectory), basename($gitDirectory)],
 			[
 				1 => ['pipe', 'w'],
 				2 => ['pipe', 'w'],
