@@ -16,6 +16,7 @@ use OCP\AppFramework\Http\Attribute\ApiRoute;
 use OCP\AppFramework\Http\Attribute\AuthorizedAdminSetting;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\StreamResponse;
 use OCP\AppFramework\OCSController;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -299,6 +300,53 @@ class ApiController extends OCSController {
 			],
 			$result['success'] ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST,
 		);
+	}
+
+	/**
+	 * Streams a gzipped tarball of the current user's GitCloud Git history (the
+	 * .git directory only) for download, so it can be backed up somewhere outside
+	 * this Nextcloud instance. Working-tree files are not included - they're
+	 * already covered by whatever backs up the user's Nextcloud storage itself.
+	 *
+	 * @return StreamResponse<Http::STATUS_OK, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
+	 *
+	 * 200: Backup archive streamed.
+	 * 400: The repository path could not be resolved, or no history exists yet.
+	 * 401: No user is logged in.
+	 */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'GET', url: '/history/backup')]
+	public function downloadHistoryBackup(): StreamResponse|DataResponse {
+		$userFolder = $this->getUserFolderOrErrorResponse();
+		if ($userFolder instanceof DataResponse) {
+			return $userFolder;
+		}
+
+		$repositoryPath = $this->getRepositoryPathOrErrorResponse($userFolder);
+		if ($repositoryPath instanceof DataResponse) {
+			return $repositoryPath;
+		}
+
+		$result = $this->vcsService->createHistoryBackup($repositoryPath, $this->userSession->getUser()->getUID());
+		if (!$result['success']) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => $result['message'] ?? 'Failed to create backup archive.',
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
+		$backupPath = $result['path'];
+		register_shutdown_function(static function () use ($backupPath): void {
+			@unlink($backupPath);
+		});
+
+		return new StreamResponse($backupPath, Http::STATUS_OK, [
+			'Content-Type' => 'application/gzip',
+			'Content-Disposition' => sprintf('attachment; filename="gitcloud-backup-%s.tar.gz"', date('Y-m-d')),
+		]);
 	}
 
 	/**

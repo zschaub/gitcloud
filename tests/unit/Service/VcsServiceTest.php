@@ -765,6 +765,61 @@ final class VcsServiceTest extends TestCase {
 		$this->assertFalse($result['success']);
 	}
 
+	public function testCreateHistoryBackupProducesExtractableArchiveContainingGitDirectory(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' init -q');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.email "test@example.com"');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' config user.name "Test"');
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' add file1.txt');
+		exec('git -C ' . escapeshellarg($this->tmpRepoPath) . ' commit -q -m "Initial commit"');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->createHistoryBackup($this->tmpRepoPath, 'testuser');
+
+		$this->assertTrue($result['success']);
+		$this->assertFileExists($result['path']);
+
+		exec('tar -tzf ' . escapeshellarg($result['path']), $entries, $exitCode);
+		$this->assertSame(0, $exitCode);
+		$this->assertContains('.git/', $entries);
+
+		unlink($result['path']);
+	}
+
+	public function testCreateHistoryBackupFailsWhenRepositoryPathMissing(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->createHistoryBackup('/nonexistent/path/' . uniqid(), 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
+
+	public function testCreateHistoryBackupFailsWhenNoHistoryExistsYet(): void {
+		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
+		mkdir($this->tmpRepoPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->createHistoryBackup($this->tmpRepoPath, 'testuser');
+
+		$this->assertFalse($result['success']);
+	}
+
 	public function testAutoCommitDeleteStagesRemovalAndRecordsDeletedSnapshot(): void {
 		$this->tmpRepoPath = sys_get_temp_dir() . '/gitcloud-test-' . uniqid();
 		mkdir($this->tmpRepoPath);

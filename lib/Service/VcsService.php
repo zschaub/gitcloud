@@ -944,6 +944,61 @@ class VcsService {
 	}
 
 	/**
+	 * Creates a downloadable backup of the repository's Git history (the .git
+	 * directory only - not the working tree, since the live files are already
+	 * backed up by whatever backs the user's Nextcloud storage) as a gzipped
+	 * tarball at a temporary path. The caller is responsible for streaming and
+	 * then deleting the returned path once it's no longer needed.
+	 * @return array{success: bool, path?: string, message?: string}
+	 */
+	public function createHistoryBackup(string $repositoryPath, string $userId): array {
+		if (!is_dir($repositoryPath)) {
+			$this->logger->warning(sprintf('Repository path does not exist: %s', $repositoryPath));
+			return ['success' => false, 'message' => 'Repository path does not exist.'];
+		}
+
+		if (!is_dir($repositoryPath . '/.git')) {
+			return ['success' => false, 'message' => 'No commit history has been created yet.'];
+		}
+
+		$backupPath = sys_get_temp_dir() . '/gitcloud-backup-' . bin2hex(random_bytes(8)) . '.tar.gz';
+
+		// Suppressed: a failure here is deliberately captured via error_get_last()
+		// below rather than left to PHP's own warning, mirroring runGit()'s pattern.
+		error_clear_last();
+		$process = @proc_open(
+			['tar', '-czf', $backupPath, '-C', $repositoryPath, '.git'],
+			[
+				1 => ['pipe', 'w'],
+				2 => ['pipe', 'w'],
+			],
+			$pipes,
+		);
+
+		if (!is_resource($process)) {
+			$lastError = error_get_last();
+			$this->logger->warning(sprintf('Unable to start the tar process: %s', $lastError['message'] ?? 'unknown error'));
+			return ['success' => false, 'message' => 'Unable to create a backup archive.'];
+		}
+
+		// Drained but discarded: tar writes nothing meaningful to stdout for -czf.
+		stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$exitCode = proc_close($process);
+
+		if ($exitCode !== 0) {
+			@unlink($backupPath);
+			$this->logger->warning(sprintf('tar failed while creating a history backup: %s', trim($stderr)));
+			return ['success' => false, 'message' => sprintf('Failed to create backup archive: %s', trim($stderr))];
+		}
+
+		$this->logger->info(sprintf('Created a Git history backup archive for user %s', $userId));
+		return ['success' => true, 'path' => $backupPath];
+	}
+
+	/**
 	 * Recursively deletes a directory and its contents.
 	 */
 	private function removeDirectoryRecursive(string $path): void {

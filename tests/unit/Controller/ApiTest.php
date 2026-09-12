@@ -9,6 +9,8 @@ use OCA\GitCloud\Controller\ApiController;
 use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Service\GitStaticBinaryService;
 use OCA\GitCloud\Service\VcsService;
+use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\StreamResponse;
 use OCP\Files\Cache\IUpdater;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
@@ -1551,6 +1553,98 @@ final class ApiTest extends TestCase {
 
 		$response = $controller->deleteHistory();
 
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(401, $response->getStatus());
+	}
+
+	public function testDownloadHistoryBackupReturnsStreamResponseForResolvedRepository(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$backupPath = sys_get_temp_dir() . '/gitcloud-test-backup-' . uniqid() . '.tar.gz';
+		file_put_contents($backupPath, 'fake-archive-contents');
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->once())
+			->method('createHistoryBackup')
+			->with('/data/testuser/files', 'testuser')
+			->willReturn(['success' => true, 'path' => $backupPath]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->downloadHistoryBackup();
+
+		$this->assertInstanceOf(StreamResponse::class, $response);
+		$this->assertEquals(200, $response->getStatus());
+
+		unlink($backupPath);
+	}
+
+	public function testDownloadHistoryBackupFailsWhenVcsServiceReportsFailure(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('createHistoryBackup')->willReturn([
+			'success' => false,
+			'message' => 'No commit history has been created yet.',
+		]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->downloadHistoryBackup();
+
+		$this->assertInstanceOf(DataResponse::class, $response);
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertEquals(400, $response->getStatus());
+	}
+
+	public function testDownloadHistoryBackupFailsWhenNoUserIsLoggedIn(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn(null);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$vcsService = $this->createMock(VcsService::class);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->downloadHistoryBackup();
+
+		$this->assertInstanceOf(DataResponse::class, $response);
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(401, $response->getStatus());
 	}
