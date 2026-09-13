@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-09-13
+
+### Changed
+
+Maintenance-only release: no user-facing behavior changes. Follows a full review of the project (code read end to end, plus the app driven against the running `stable34` instance), which also turned up nine open defects - those were deliberately **logged, not fixed**, and are tracked in README's new "Known Bugs" section and on the Phase 3 kanban as `#GC-Phase3-Bug-1` … `-9`.
+
+**Consistency**
+
+- `VcsService::rollbackToSnapshot` chained its parent snapshot by file *path* (`getSnapshotsForFile`) while `commitChanges` and all three auto-commit paths chain by `file_id`. After a rename, the file's real latest snapshot is recorded under a different path, so rollback linked the new row to the wrong parent (or to none). It now uses `findLatestForFileId`, falling back to the path lookup only for legacy rows predating the `file_id` migration.
+- `ApiController::getRepositoryPathOrErrorResponse` reimplemented `VcsService::resolveRepositoryPath` (the version the Node-event listeners already use) instead of calling it; it now delegates and only adds the error response. Its two separate failure messages collapse into one, since the underlying helper doesn't distinguish them.
+- Three docblocks had gone stale and actively misled: `GitRepositoryPathGuard` still described `.git` as sitting "at the root of the user's own Nextcloud storage" (untrue since 0.2.8 relocated it); `GitRepositoryWriteGuard` still carried 0.2.6's "KNOWN GAP … Root cause not identified" paragraph for a gap 0.2.7 root-caused and fixed; and `VcsService`'s class docblock was still the original stub text ("In a real-world scenario, this would interface with an actual Git repository").
+- `ApiController::downloadHistoryBackup`'s docblock still called the archive "the .git directory only".
+
+**Repeated code**
+
+- Five near-identical `proc_open` blocks in `VcsService` (`runGit`, `runGitConfigGet`, `runGitConfigSet`, and the backup `tar`) collapsed into a single private `runProcess()`, so failure handling, pipe draining and output trimming can't drift apart between them. `describeProcOpenFailure()` now takes the executable being started, so a failure to launch `tar` stops reporting itself as "Unable to start the git process".
+- `autoCommitDelete`/`autoCommitRename`/`autoCommitRestore` were ~35 lines each of the same sequence (stage → bail out if nothing was actually staged → commit → read back the hash → record a snapshot chained by file id), differing only in which paths they stage, what they call the change, and which status they record. They are now thin wrappers over one `autoCommitChange()`; every existing message and log line is preserved byte-identically via a `match` on the change kind.
+- The `git rev-parse HEAD` + warn-on-failure + trim block appeared five times; it is now `readHeadCommitHash()`.
+- `VcsService::findBundledGitBinary` and `GitStaticBinaryService` each built and checked the `bin/<arch>/git` path themselves. Both now go through a new shared `BundledGitBinary` helper, for the same reason `GitArchitecture::detect()` already exists: the two must never disagree on the layout.
+- Frontend: `extractErrorMessage` existed as four verbatim copies plus two inlined in `CommitDialog.vue`, `extractBlobErrorMessage` and `fileName` as one and two copies. All moved to new `src/utils/ocs.ts` and `src/utils/path.ts`.
+
+**Dead code**
+
+- Removed `VcsService::updateSnapshotStatus()` (no production caller - only its own two tests), `SnapshotMapper::findAllForFileId()` (no caller anywhere, tests included), and the `staticGitPresent` key from `GitStaticBinaryService::getStatus()` (returned but never consumed; the settings page reads `VcsService`'s `staticGitAvailable`).
+- `parent_snapshot_id` is also effectively write-only today - set on every snapshot, returned by `GET /snapshots`, typed in `RollbackPanel.vue`, read by nothing - but is **kept**, since the Phase 3 "Compare snapshots" item plausibly needs it.
+
+**Efficiency**
+
+- `ApiController::findDeletedFiles` ran one `getSnapshotsForFile` query per committed-but-missing path on every dashboard load. It now takes a map built once by a new `VcsService::getLatestStatusByFilePath()`.
+- `VcsService` memoizes `SnapshotMapper::findAllForUser` per user for the life of the request (it is constructed per request), so the directory grouping and the status map above share one query instead of one each. Invalidated by `createSnapshotRecord()`/`untrackFile()`/`deleteHistory()` - the only things in the class that change those rows - so a read after a write in the same request can't see stale data.
+- `GitTrackedNodeDeletedListener`'s folder fallback pulled the user's **entire** snapshot table into PHP and prefix-matched there. That fallback runs for every delete in the instance that isn't itself a tracked file, i.e. for ordinary untracked files too, so deleting N unrelated files meant N full scans. A new `SnapshotMapper::findAllForUserUnderPath()` does the prefix match in SQL instead, matching both the bare and the legacy leading-slash path forms so pre-0.1.7 rows still resolve.
+
+**Housekeeping**
+
+- `npm run build` now clears `js/` and `css/` first (and a `npm run clean` script was added). `css/` is not vite's own `outDir`, so it had never been emptied and had accumulated every build since June - 64 files / 1.7 MB, of which 11 files / 96 KB were current. Nothing was committed (both are gitignored), but an App Store tarball of the app directory would have shipped the lot.
+- **Settings > Personal > GitCloud** rendered two sections both titled "GitCloud", repeating the page heading twice; they are now "Back up commit history" and "Danger zone". The backup section's description still referred to ".git history" (stale since 0.2.8) and the danger-zone description began by repeating the words "Danger zone".
+
+Covered by a net +2 tests: two removed with the dead `updateSnapshotStatus`, four added - `getLatestStatusByFilePath`'s newest-wins behavior, the per-request memo being shared across readers, the memo being invalidated by a write, and `rollbackToSnapshot`'s new file-id parent chaining plus its legacy no-`file_id` path fallback. `GitTrackedNodeDeletedListenerTest`'s folder cases now assert the scoped query is asked for the right prefix, since scoping moved from PHP into SQL. Full PHPUnit suite **157 tests, 375 assertions** (up from 155/371) verified passing inside the running `stable34` container (synced via `docker cp` + a restart first); `composer lint`, `composer cs:check`, `npm run lint`, `npm run stylelint` and a clean `vite build` all verified. `composer openapi` was not re-run: no route or response shape changed.
+
+**Verified end-to-end against the running `stable34` instance** afterwards (browser/HTTP driving granted for this session): a commit, a second commit to the same file, the resulting 2-entry snapshot list, and a rollback that correctly reverted the file's content on disk; a whole-folder delete auto-committing every tracked file inside it through the new SQL-scoped query, with the `Deleted` status surfacing correctly through the new batched status map; a single-file restore from the Files app's trash producing `Auto-commit: restored …` and clearing the status back to `Unchanged`; and an unrelated untracked-file delete correctly remaining a no-op.
+
 ## [0.2.8] - 2026-09-12
 
 ### Changed

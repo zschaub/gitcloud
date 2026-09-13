@@ -230,40 +230,6 @@ final class VcsServiceTest extends TestCase {
 		$this->assertSame(42, $result->getFileId());
 	}
 
-	public function testUpdateSnapshotStatusUpdatesAndPersistsStatus(): void {
-		$logger = $this->createMock(LoggerInterface::class);
-		$timeFactory = $this->createMock(ITimeFactory::class);
-
-		$existing = new Snapshot();
-		$existing->setStatus('committed');
-
-		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->method('find')->with(42)->willReturn($existing);
-		$snapshotMapper->expects($this->once())
-			->method('update')
-			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getStatus() === 'rolled_back'))
-			->willReturnArgument(0);
-
-		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
-
-		$result = $service->updateSnapshotStatus(42, 'rolled_back');
-
-		$this->assertSame('rolled_back', $result->getStatus());
-	}
-
-	public function testUpdateSnapshotStatusPropagatesDoesNotExistException(): void {
-		$logger = $this->createMock(LoggerInterface::class);
-		$timeFactory = $this->createMock(ITimeFactory::class);
-
-		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->method('find')->willThrowException(new DoesNotExistException('not found'));
-
-		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
-
-		$this->expectException(DoesNotExistException::class);
-		$service->updateSnapshotStatus(99, 'rolled_back');
-	}
-
 	public function testRollbackToSnapshotRestoresFileAndRecordsSnapshot(): void {
 		$this->tmpRepoPath = $this->createWorkingTree();
 		exec($this->gitInitCommand());
@@ -296,7 +262,11 @@ final class VcsServiceTest extends TestCase {
 
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
 		$snapshotMapper->method('find')->with(1)->willReturn($targetSnapshot);
-		$snapshotMapper->method('findAllForFile')->with('testuser', 'file1.txt')->willReturn([$mostRecentSnapshot]);
+		// Chained by file id, like every other snapshot writer in this class, so the
+		// new row hangs off the file's real latest snapshot even if that was recorded
+		// under a different path after a rename.
+		$snapshotMapper->method('findLatestForFileId')->with('testuser', 55)->willReturn($mostRecentSnapshot);
+		$snapshotMapper->expects($this->never())->method('findAllForFile');
 		$snapshotMapper->expects($this->once())
 			->method('insert')
 			->with($this->callback(function (Snapshot $snapshot): bool {
@@ -317,6 +287,55 @@ final class VcsServiceTest extends TestCase {
 
 		$this->assertTrue($result['success']);
 		$this->assertSame('original', file_get_contents($this->tmpRepoPath . '/file1.txt'));
+	}
+
+	public function testRollbackToSnapshotChainsByPathForLegacySnapshotWithoutFileId(): void {
+		// A snapshot recorded before the file_id migration has nothing to chain by, so
+		// the parent lookup falls back to an exact path match rather than dropping the
+		// chain entirely.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'original');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' rev-parse HEAD', $headOutput);
+		$originalCommitHash = trim($headOutput[0]);
+
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'changed');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Second commit"');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$targetSnapshot = new Snapshot();
+		$targetSnapshot->setId(1);
+		$targetSnapshot->setUserId('testuser');
+		$targetSnapshot->setFilePath('file1.txt');
+		$targetSnapshot->setCommitHash($originalCommitHash);
+		$targetSnapshot->setFileId(null);
+
+		$mostRecentSnapshot = new Snapshot();
+		$mostRecentSnapshot->setId(7);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('find')->with(1)->willReturn($targetSnapshot);
+		$snapshotMapper->method('findAllForFile')->with('testuser', 'file1.txt')->willReturn([$mostRecentSnapshot]);
+		$snapshotMapper->expects($this->never())->method('findLatestForFileId');
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getParentSnapshotId() === 7 && $snapshot->getFileId() === null))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->rollbackToSnapshot($this->tmpRepoPath, 'file1.txt', 1, 'testuser');
+
+		$this->assertTrue($result['success']);
 	}
 
 	public function testRollbackToSnapshotFailsWhenSnapshotBelongsToDifferentUser(): void {
@@ -596,6 +615,83 @@ final class VcsServiceTest extends TestCase {
 		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
 
 		$this->assertSame([], $service->getCommittedDirectories('testuser'));
+	}
+
+	public function testGetLatestStatusByFilePathKeepsOnlyTheNewestStatusPerPath(): void {
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		// findAllForUser is ordered newest-first, so the first row seen for a path wins.
+		$newest = new Snapshot();
+		$newest->setFilePath('folder/a.txt');
+		$newest->setStatus('deleted');
+
+		$older = new Snapshot();
+		$older->setFilePath('folder/a.txt');
+		$older->setStatus('committed');
+
+		$otherFile = new Snapshot();
+		$otherFile->setFilePath('/folder/b.txt');
+		$otherFile->setStatus('rolled_back');
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findAllForUser')->with('testuser')->willReturn([$newest, $older, $otherFile]);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$this->assertSame([
+			// Keyed without a leading slash, matching every other path in this class.
+			'folder/a.txt' => 'deleted',
+			'folder/b.txt' => 'rolled_back',
+		], $service->getLatestStatusByFilePath('testuser'));
+	}
+
+	public function testSnapshotRowsAreFetchedOncePerRequestAcrossReaders(): void {
+		// A dashboard load reads the same rows from two angles; VcsService is built
+		// fresh per request, so that must be one query rather than one per reader.
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+
+		$snapshot = new Snapshot();
+		$snapshot->setFilePath('folder/a.txt');
+		$snapshot->setStatus('committed');
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->once())
+			->method('findAllForUser')
+			->with('testuser')
+			->willReturn([$snapshot]);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$service->getCommittedDirectories('testuser');
+		$service->getLatestStatusByFilePath('testuser');
+		$service->getCommittedDirectories('testuser');
+
+		$this->addToAssertionCount(1);
+	}
+
+	public function testSnapshotRowsAreRefetchedAfterANewSnapshotIsRecorded(): void {
+		// The per-request memo must not survive a write, or a caller that commits and
+		// then re-reads in the same request would see stale rows.
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->exactly(2))
+			->method('findAllForUser')
+			->with('testuser')
+			->willReturn([]);
+		$snapshotMapper->method('insert')->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$service->getCommittedDirectories('testuser');
+		$service->createSnapshotRecord('testuser', 'folder/a.txt', 'abc123', 'msg', null, 'committed', 7);
+		$service->getCommittedDirectories('testuser');
+
+		$this->addToAssertionCount(1);
 	}
 
 	public function testUntrackFileDeletesByFileIdWhenAvailable(): void {

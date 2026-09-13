@@ -83,6 +83,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('commitChanges')
 			->with('/data/testuser/files', [
 				['path' => 'file1.txt', 'fileId' => 101],
@@ -148,6 +149,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('commitChanges')
 			->with('/data/testuser/files', [
 				['path' => 'folder/a.txt', 'fileId' => 201],
@@ -208,6 +210,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('commitChanges');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
@@ -223,6 +226,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -259,6 +263,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('commitChanges')
 			->with('/data/testuser/files', [['path' => 'file1.txt', 'fileId' => 101]], '0', 'testuser')
 			->willReturn([
@@ -281,6 +286,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -321,6 +327,7 @@ final class ApiTest extends TestCase {
 		$snapshot->setParentSnapshotId(null);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getSnapshotsForFile')
 			->with('testuser', 'file1.txt')
 			->willReturn([$snapshot]);
@@ -347,6 +354,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -364,6 +372,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -397,6 +406,7 @@ final class ApiTest extends TestCase {
 		$snapshot->setParentSnapshotId(null);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getSnapshotsForFile')
 			->with('testuser', 'deleted.txt')
 			->willReturn([$snapshot]);
@@ -426,6 +436,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getSnapshotsForFile')->with('testuser', 'nonexistent.txt')->willReturn([]);
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
@@ -468,6 +479,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('rollbackToSnapshot')
 			->with('/data/testuser/files', 'file1.txt', 1, 'testuser')
 			->willReturn([
@@ -513,6 +525,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('rollbackToSnapshot')
 			->with('/data/testuser/files', 'file1.txt', 1, 'testuser')
 			->willReturn([
@@ -553,6 +566,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('rollbackToSnapshot')
 			->with('/data/testuser/files', 'deleted.txt', 1, 'testuser')
 			->willReturn([
@@ -572,6 +586,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -589,6 +604,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -620,6 +636,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -667,6 +684,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -711,18 +729,18 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
-		$deletedSnapshot = new Snapshot();
-		$deletedSnapshot->setStatus('deleted');
-
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
 				['path' => 'folder', 'files' => ['folder/deleted.txt']],
 			]);
-		$vcsService->method('getSnapshotsForFile')
-			->with('testuser', 'folder/deleted.txt')
-			->willReturn([$deletedSnapshot]);
+		// Built once for every tracked path, rather than one lookup per missing file.
+		$vcsService->expects($this->once())
+			->method('getLatestStatusByFilePath')
+			->with('testuser')
+			->willReturn(['folder/deleted.txt' => 'deleted']);
 		// The deleted path has nothing left in the working tree to shell out
 		// `git status` for, so it must not be included in the batched call.
 		$vcsService->expects($this->once())
@@ -788,6 +806,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -838,6 +857,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -870,6 +890,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -905,6 +926,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -956,6 +978,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -1001,6 +1024,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([]);
@@ -1049,6 +1073,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getCommittedDirectories')
 			->with('testuser')
 			->willReturn([
@@ -1083,6 +1108,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -1120,6 +1146,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('commitChanges');
 
 		$appConfig = $this->createMock(IAppConfig::class);
@@ -1163,6 +1190,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('commitChanges');
 
 		$appConfig = $this->createMock(IAppConfig::class);
@@ -1207,6 +1235,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->once())
 			->method('commitChanges')
 			->with('/data/testuser/files', [['path' => 'big.txt', 'fileId' => 301]], 'Initial commit', 'testuser')
@@ -1255,6 +1284,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('commitChanges');
 
 		$appConfig = $this->createMock(IAppConfig::class);
@@ -1298,6 +1328,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('commitChanges')
 			->with('/data/testuser/files', [['path' => 'file1.txt', 'fileId' => 101]], 'Initial commit', 'testuser')
 			->willReturn([
@@ -1318,6 +1349,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$appConfig = $this->createMock(IAppConfig::class);
 		$appConfig->expects($this->once())
@@ -1345,6 +1377,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$appConfig = $this->createMock(IAppConfig::class);
 		$appConfig->expects($this->never())->method('setValueInt');
@@ -1363,6 +1396,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$appConfig = $this->createMock(IAppConfig::class);
 		$appConfig->expects($this->never())->method('setValueInt');
@@ -1381,6 +1415,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$appConfig = $this->createMock(IAppConfig::class);
 		$appConfig->expects($this->never())->method('setValueInt');
@@ -1400,6 +1435,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getGitBinaryStatus')->willReturn([
 			'mode' => 'auto',
 			'systemGitAvailable' => true,
@@ -1410,7 +1446,6 @@ final class ApiTest extends TestCase {
 		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
 		$gitStaticBinaryService->method('getStatus')->willReturn([
 			'architecture' => 'amd64',
-			'staticGitPresent' => false,
 			'installedVersion' => null,
 			'pinnedVersion' => 'v2.55.0-1',
 			'updateAvailable' => false,
@@ -1438,6 +1473,7 @@ final class ApiTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('getGitBinaryStatus')->willReturn([
 			'mode' => 'static',
 			'systemGitAvailable' => false,
@@ -1448,7 +1484,6 @@ final class ApiTest extends TestCase {
 		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
 		$gitStaticBinaryService->method('getStatus')->willReturn([
 			'architecture' => 'amd64',
-			'staticGitPresent' => true,
 			'installedVersion' => 'v2.54.0-1',
 			'pinnedVersion' => 'v2.55.0-1',
 			'updateAvailable' => true,
@@ -1469,6 +1504,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
 		$gitStaticBinaryService->method('downloadForCurrentArchitecture')->willReturn([
@@ -1489,6 +1525,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$gitStaticBinaryService = $this->createMock(GitStaticBinaryService::class);
 		$gitStaticBinaryService->method('downloadForCurrentArchitecture')->willReturn([
@@ -1525,6 +1562,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->once())
 			->method('deleteHistory')
 			->with('/data/testuser/files', 'testuser')
@@ -1548,6 +1586,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -1581,6 +1620,7 @@ final class ApiTest extends TestCase {
 		file_put_contents($backupPath, 'fake-archive-contents');
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->once())
 			->method('createHistoryBackup')
 			->with('/data/testuser/files', 'testuser')
@@ -1617,6 +1657,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('createHistoryBackup')->willReturn([
 			'success' => false,
 			'message' => 'No commit history has been created yet.',
@@ -1639,6 +1680,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
 
@@ -1664,6 +1706,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->once())
 			->method('untrackFile')
 			->with('testuser', 'folder/a.txt')
@@ -1682,6 +1725,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('untrackFile');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
@@ -1700,6 +1744,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('untrackFile');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
@@ -1725,6 +1770,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->method('untrackFile')->willReturn(['success' => false, 'message' => 'not tracked.']);
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
@@ -1750,6 +1796,7 @@ final class ApiTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->once())
 			->method('untrackDirectory')
 			->with('testuser', 'docs')
@@ -1768,6 +1815,7 @@ final class ApiTest extends TestCase {
 		$userSession = $this->createMock(IUserSession::class);
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('untrackDirectory');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
@@ -1786,6 +1834,7 @@ final class ApiTest extends TestCase {
 
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
 		$vcsService->expects($this->never())->method('untrackDirectory');
 
 		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());

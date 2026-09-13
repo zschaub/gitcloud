@@ -7,6 +7,7 @@ import NcTextField from '@nextcloud/vue/components/NcTextField'
 import { ref, computed } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
+import { extractBlobErrorMessage, extractErrorMessage } from '../utils/ocs'
 
 const confirmOpen = ref(false)
 const confirmationText = ref('')
@@ -18,28 +19,6 @@ const resultMessage = ref('')
 
 const backupStatus = ref<null | 'error'>(null)
 const backupErrorMessage = ref('')
-
-function extractErrorMessage(error: unknown, fallback: string): string {
-	const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
-	return axiosError.response?.data?.ocs?.data?.message ?? fallback
-}
-
-// The backup download uses responseType: 'blob', so an error response body
-// also arrives as a Blob rather than parsed JSON - it has to be read and
-// parsed manually instead of reusing extractErrorMessage() above.
-async function extractBlobErrorMessage(error: unknown, fallback: string): Promise<string> {
-	const axiosError = error as { response?: { data?: Blob } }
-	const blob = axiosError.response?.data
-	if (!(blob instanceof Blob)) {
-		return fallback
-	}
-	try {
-		const parsed = JSON.parse(await blob.text())
-		return parsed?.ocs?.data?.message ?? fallback
-	} catch {
-		return fallback
-	}
-}
 
 async function downloadBackup() {
 	isDownloading.value = true
@@ -111,8 +90,8 @@ const confirmButtons = computed(() => [
 
 <template>
 	<NcSettingsSection
-		name="GitCloud"
-		description="Download a backup of your GitCloud commit history. This does not include your files themselves - only the .git history used for commits and rollbacks.">
+		name="Back up commit history"
+		description="Download a backup of your GitCloud commit history. This does not include your files themselves - only the Git repository used for commits and rollbacks.">
 		<NcButton :disabled="isDownloading" @click="downloadBackup">
 			{{ isDownloading ? 'Preparing backup…' : 'Download backup' }}
 		</NcButton>
@@ -121,8 +100,8 @@ const confirmButtons = computed(() => [
 	</NcSettingsSection>
 
 	<NcSettingsSection
-		name="GitCloud"
-		description="Danger zone: permanently delete your GitCloud commit history to reclaim disk space.">
+		name="Danger zone"
+		description="Permanently delete your GitCloud commit history to reclaim disk space. Your files are not affected.">
 		<NcButton variant="error" @click="openConfirm">
 			Delete all commit history
 		</NcButton>

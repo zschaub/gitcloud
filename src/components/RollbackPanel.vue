@@ -6,6 +6,8 @@ import CloseIcon from '@mdi/svg/svg/close.svg?raw'
 import { ref, computed, watch } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
+import { extractErrorMessage } from '../utils/ocs'
+import { fileName } from '../utils/path'
 
 const props = defineProps<{
     open: boolean;
@@ -35,15 +37,6 @@ const rollbackResultMessage = ref('')
 
 const confirmSnapshot = ref<Snapshot | null>(null)
 const isRollingBack = ref(false)
-
-function fileName(path: string): string {
-	return path.split('/').pop() ?? path
-}
-
-function extractErrorMessage(error: unknown, fallback: string): string {
-	const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
-	return axiosError.response?.data?.ocs?.data?.message ?? fallback
-}
 
 async function loadSnapshots() {
 	if (!props.filePath) return

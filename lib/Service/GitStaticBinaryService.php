@@ -41,7 +41,7 @@ class GitStaticBinaryService {
 	}
 
 	/**
-	 * @return array{architecture: string|null, staticGitPresent: bool, installedVersion: string|null, pinnedVersion: string|null, updateAvailable: bool}
+	 * @return array{architecture: string|null, installedVersion: string|null, pinnedVersion: string|null, updateAvailable: bool}
 	 */
 	public function getStatus(): array {
 		$architecture = GitArchitecture::detect();
@@ -49,20 +49,19 @@ class GitStaticBinaryService {
 		try {
 			$appPath = $this->appManager->getAppPath(Application::APP_ID);
 		} catch (AppPathNotFoundException) {
-			return ['architecture' => $architecture, 'staticGitPresent' => false, 'installedVersion' => null, 'pinnedVersion' => null, 'updateAvailable' => false];
+			return ['architecture' => $architecture, 'installedVersion' => null, 'pinnedVersion' => null, 'updateAvailable' => false];
 		}
 
 		$pin = $this->loadPin($appPath);
 		$pinnedVersion = $pin['tag'] ?? null;
 
-		$staticGitPresent = $architecture !== null && $this->bundledBinaryPath($appPath, $architecture) !== false;
 		// Only meaningful once a binary is actually installed - a missing binary is
 		// "not downloaded" (the existing Download button), not "update available".
-		$installedVersion = $staticGitPresent ? $this->installedVersion($appPath, (string)$architecture) : null;
+		$staticGitPresent = $architecture !== null && BundledGitBinary::path($appPath, $architecture) !== false;
+		$installedVersion = $staticGitPresent ? $this->installedVersion($appPath, $architecture) : null;
 
 		return [
 			'architecture' => $architecture,
-			'staticGitPresent' => $staticGitPresent,
 			'installedVersion' => $installedVersion,
 			'pinnedVersion' => $pinnedVersion,
 			// A binary installed before this version-tracking existed (e.g. via an
@@ -135,7 +134,7 @@ class GitStaticBinaryService {
 				return ['success' => false, 'message' => 'Downloaded archive did not have the expected layout.'];
 			}
 
-			$binDir = $appPath . '/bin/' . $architecture;
+			$binDir = BundledGitBinary::directoryFor($appPath, $architecture);
 			if (!is_dir($binDir) && !mkdir($binDir, 0755, true) && !is_dir($binDir)) {
 				return ['success' => false, 'message' => sprintf('Failed to create %s.', $binDir)];
 			}
@@ -183,13 +182,8 @@ class GitStaticBinaryService {
 		return is_array($decoded) ? $decoded : null;
 	}
 
-	private function bundledBinaryPath(string $appPath, string $architecture): string|false {
-		$candidate = $appPath . '/bin/' . $architecture . '/git';
-		return (is_file($candidate) && is_executable($candidate)) ? $candidate : false;
-	}
-
 	private function installedVersion(string $appPath, string $architecture): ?string {
-		$markerPath = $appPath . '/bin/' . $architecture . '/' . self::VERSION_MARKER_FILENAME;
+		$markerPath = BundledGitBinary::directoryFor($appPath, $architecture) . '/' . self::VERSION_MARKER_FILENAME;
 		if (!is_file($markerPath)) {
 			return null;
 		}

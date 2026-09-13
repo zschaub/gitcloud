@@ -62,7 +62,7 @@ final class GitTrackedNodeDeletedListenerTest extends TestCase {
 		// untracked file's own path is never a valid prefix of another path.
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
 		$snapshotMapper->method('findLatestForFileId')->with('testuser', 42)->willReturn(null);
-		$snapshotMapper->method('findAllForUser')->with('testuser')->willReturn([]);
+		$snapshotMapper->method('findAllForUserUnderPath')->willReturn([]);
 
 		$userFolder = $this->createMock(Folder::class);
 		$userFolder->method('getRelativePath')->with('/testuser/files/untracked.txt')->willReturn('/untracked.txt');
@@ -204,16 +204,14 @@ final class GitTrackedNodeDeletedListenerTest extends TestCase {
 		$alreadyDeleted->setFilePath('Test Folder/already-gone.txt');
 		$alreadyDeleted->setStatus('deleted');
 
-		// Outside the deleted folder entirely - must not be touched.
-		$unrelated = new Snapshot();
-		$unrelated->setFileId(13);
-		$unrelated->setFilePath('Other Folder/unrelated.txt');
-		$unrelated->setStatus('committed');
-
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->method('findAllForUser')->with('testuser')->willReturn([
-			$insideFile1, $insideFile2, $alreadyDeleted, $unrelated,
-		]);
+		// Scoping to the deleted folder is the query's job now, so what matters here
+		// is that it is asked for exactly that prefix - a file outside the folder is
+		// never returned to the listener in the first place.
+		$snapshotMapper->expects($this->once())
+			->method('findAllForUserUnderPath')
+			->with('testuser', 'Test Folder/')
+			->willReturn([$insideFile1, $insideFile2, $alreadyDeleted]);
 		$snapshotMapper->expects($this->never())->method('findLatestForFileId');
 
 		$vcsService = $this->createMock(VcsService::class);
@@ -247,7 +245,7 @@ final class GitTrackedNodeDeletedListenerTest extends TestCase {
 		$rootFolder = $this->createMock(IRootFolder::class);
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
-		// findAllForUser is ordered newest-first: the newer "rolled_back" snapshot
+		// findAllForUserUnderPath is ordered newest-first: the newer "rolled_back" snapshot
 		// for file_id 10 must win over the older "deleted" one, so this file's
 		// deletion still gets auto-committed rather than being skipped.
 		$newer = new Snapshot();
@@ -261,7 +259,7 @@ final class GitTrackedNodeDeletedListenerTest extends TestCase {
 		$older->setStatus('deleted');
 
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->method('findAllForUser')->with('testuser')->willReturn([$newer, $older]);
+		$snapshotMapper->method('findAllForUserUnderPath')->with('testuser', 'Test Folder/')->willReturn([$newer, $older]);
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('resolveRepositoryPath')->with($userFolder)->willReturn('/data/testuser/files');
@@ -293,7 +291,7 @@ final class GitTrackedNodeDeletedListenerTest extends TestCase {
 		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
 
 		$snapshotMapper = $this->createMock(SnapshotMapper::class);
-		$snapshotMapper->expects($this->never())->method('findAllForUser');
+		$snapshotMapper->expects($this->never())->method('findAllForUserUnderPath');
 
 		$vcsService = $this->createMock(VcsService::class);
 		$vcsService->method('resolveRepositoryPath')->with($userFolder)->willReturn('/data/testuser/files');

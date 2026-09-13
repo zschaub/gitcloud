@@ -48,6 +48,37 @@ class SnapshotMapper extends QBMapper {
 	}
 
 	/**
+	 * Every snapshot for a user whose recorded path falls under $pathPrefix (which
+	 * must already end in "/"), newest first. Used when a whole folder is deleted and
+	 * its tracked descendants have to be found from history, since they can no longer
+	 * be listed from disk - doing the prefix match in SQL keeps an unrelated delete
+	 * anywhere in the instance from pulling the user's entire snapshot table into PHP.
+	 *
+	 * Both the bare and leading-slash forms are matched: paths are normalized without
+	 * one today, but rows recorded before 0.1.7 could carry it.
+	 *
+	 * @return Snapshot[]
+	 */
+	public function findAllForUserUnderPath(string $userId, string $pathPrefix): array {
+		$qb = $this->db->getQueryBuilder();
+
+		$escapedPrefix = $this->db->escapeLikeParameter($pathPrefix);
+
+		$select = $qb
+			->select('*')
+			->from($this->getTableName())
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->orX(
+				$qb->expr()->like('file_path', $qb->createNamedParameter($escapedPrefix . '%')),
+				$qb->expr()->like('file_path', $qb->createNamedParameter('/' . $escapedPrefix . '%')),
+			))
+			->orderBy('created_at', 'DESC')
+			->addOrderBy('id', 'DESC');
+
+		return $this->findEntities($select);
+	}
+
+	/**
 	 * @return Snapshot[]
 	 */
 	public function findAllForFile(string $userId, string $filePath): array {
@@ -58,22 +89,6 @@ class SnapshotMapper extends QBMapper {
 			->from($this->getTableName())
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('file_path', $qb->createNamedParameter($filePath)))
-			->orderBy('created_at', 'DESC');
-
-		return $this->findEntities($select);
-	}
-
-	/**
-	 * @return Snapshot[]
-	 */
-	public function findAllForFileId(string $userId, int $fileId): array {
-		$qb = $this->db->getQueryBuilder();
-
-		$select = $qb
-			->select('*')
-			->from($this->getTableName())
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->andWhere($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, $qb::PARAM_INT)))
 			->orderBy('created_at', 'DESC');
 
 		return $this->findEntities($select);

@@ -303,10 +303,11 @@ class ApiController extends OCSController {
 	}
 
 	/**
-	 * Streams a gzipped tarball of the current user's GitCloud Git history (the
-	 * .git directory only) for download, so it can be backed up somewhere outside
-	 * this Nextcloud instance. Working-tree files are not included - they're
-	 * already covered by whatever backs up the user's Nextcloud storage itself.
+	 * Streams a gzipped tarball of the current user's GitCloud Git history (the Git
+	 * directory only, see VcsService::resolveGitDirectory()) for download, so it can
+	 * be backed up somewhere outside this Nextcloud instance. Working-tree files are
+	 * not included - they're already covered by whatever backs up the user's
+	 * Nextcloud storage itself.
 	 *
 	 * @return StreamResponse<Http::STATUS_OK, array{}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_UNAUTHORIZED, array{status: string, message: string}, array{}>
 	 *
@@ -450,6 +451,7 @@ class ApiController extends OCSController {
 		}
 
 		$userId = $this->userSession->getUser()->getUID();
+		$latestStatuses = $this->vcsService->getLatestStatusByFilePath($userId);
 
 		$directoriesWithExistingFiles = [];
 		$allExistingFiles = [];
@@ -462,7 +464,7 @@ class ApiController extends OCSController {
 			// A committed path that no longer exists but was auto-committed as a
 			// deletion (see GitTrackedNodeDeletedListener) is kept, not dropped,
 			// so its history stays reachable/restorable via the dashboard.
-			$deletedFiles = $this->findDeletedFiles($userId, $directory['files'], $existingFiles);
+			$deletedFiles = $this->findDeletedFiles($directory['files'], $existingFiles, $latestStatuses);
 
 			// The repository root ("/") is excluded: it groups files purely because
 			// they sit at the top level of the user's whole Nextcloud storage, not
@@ -850,11 +852,16 @@ class ApiController extends OCSController {
 	 * unlinked for some other reason, in which case the safer default is to keep
 	 * dropping it as today.
 	 *
+	 * $latestStatuses is passed in already built for every path at once (see
+	 * VcsService::getLatestStatusByFilePath) rather than looked up per path, which
+	 * would be one query per missing file on every dashboard load.
+	 *
 	 * @param string[] $filePaths
 	 * @param string[] $existingFiles
+	 * @param array<string, string> $latestStatuses
 	 * @return string[]
 	 */
-	private function findDeletedFiles(string $userId, array $filePaths, array $existingFiles): array {
+	private function findDeletedFiles(array $filePaths, array $existingFiles, array $latestStatuses): array {
 		$existingFileSet = array_flip($existingFiles);
 
 		$deletedFiles = [];
@@ -863,8 +870,7 @@ class ApiController extends OCSController {
 				continue;
 			}
 
-			$snapshots = $this->vcsService->getSnapshotsForFile($userId, $filePath);
-			if (isset($snapshots[0]) && $snapshots[0]->getStatus() === 'deleted') {
+			if (($latestStatuses[$filePath] ?? null) === 'deleted') {
 				$deletedFiles[] = $filePath;
 			}
 		}
@@ -935,23 +941,15 @@ class ApiController extends OCSController {
 	 * @return string|DataResponse<Http::STATUS_BAD_REQUEST, array{status: string, message: string}, array{}>
 	 */
 	private function getRepositoryPathOrErrorResponse(Folder $userFolder): string|DataResponse {
-		$userFolderStorage = $userFolder->getStorage();
-		if (!$userFolderStorage->isLocal()) {
-			return new DataResponse(
-				[
-					'status' => 'error',
-					'message' => 'GitCloud only supports files stored on local storage.',
-				],
-				Http::STATUS_BAD_REQUEST,
-			);
-		}
-
-		$repositoryPath = $userFolderStorage->getLocalFile($userFolder->getInternalPath());
+		// VcsService::resolveRepositoryPath() is the single implementation of this,
+		// shared with the Node-event listeners, which have no response to return; all
+		// this adds is turning its false into an error response.
+		$repositoryPath = $this->vcsService->resolveRepositoryPath($userFolder);
 		if ($repositoryPath === false) {
 			return new DataResponse(
 				[
 					'status' => 'error',
-					'message' => 'Unable to resolve the local storage path.',
+					'message' => 'GitCloud could not resolve a local filesystem path for your files - only local storage is supported.',
 				],
 				Http::STATUS_BAD_REQUEST,
 			);

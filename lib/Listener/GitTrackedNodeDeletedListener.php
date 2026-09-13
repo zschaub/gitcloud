@@ -140,12 +140,16 @@ class GitTrackedNodeDeletedListener implements IEventListener {
 			return;
 		}
 
+		// Scoped to the deleted path in SQL rather than walking every snapshot the user
+		// has ever recorded: this fallback runs for *every* delete in the instance that
+		// isn't itself a tracked file, so it must stay cheap for the overwhelmingly
+		// common case of an ordinary untracked file, which matches nothing here.
 		$latestSnapshotsByFileId = [];
-		foreach ($this->snapshotMapper->findAllForUser($userId) as $snapshot) {
+		foreach ($this->snapshotMapper->findAllForUserUnderPath($userId, $relativeFolderPath . '/') as $snapshot) {
 			$snapshotFileId = $snapshot->getFileId();
 			if ($snapshotFileId === null || isset($latestSnapshotsByFileId[$snapshotFileId])) {
-				// findAllForUser is ordered newest-first, so the first snapshot
-				// seen for a given file_id is already its latest.
+				// Ordered newest-first, so the first snapshot seen for a given
+				// file_id is already its latest.
 				continue;
 			}
 			$latestSnapshotsByFileId[$snapshotFileId] = $snapshot;
@@ -157,10 +161,7 @@ class GitTrackedNodeDeletedListener implements IEventListener {
 				continue;
 			}
 
-			$descendantPath = ltrim($snapshot->getFilePath(), '/');
-			if (str_starts_with($descendantPath, $relativeFolderPath . '/')) {
-				$descendants[$descendantFileId] = $descendantPath;
-			}
+			$descendants[$descendantFileId] = ltrim($snapshot->getFilePath(), '/');
 		}
 
 		if ($descendants === []) {

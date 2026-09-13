@@ -9,6 +9,7 @@ import { computed, onMounted, ref } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
 import { loadState } from '@nextcloud/initial-state'
+import { extractErrorMessage } from '../utils/ocs'
 
 const maxFileSizeMb = ref<number>(loadState('gitcloud', 'max-file-size-mb', 100))
 const enforcementMode = ref<string>(loadState('gitcloud', 'enforcement-mode', 'block'))
@@ -41,11 +42,6 @@ const updateAvailableMessage = computed(() => {
 	const installed = gitStatus.value.installedVersion ? ` — you currently have ${gitStatus.value.installedVersion}` : ''
 	return `A newer static git build is available${pinned}${installed}.`
 })
-
-function extractErrorMessage(error: unknown, fallback: string): string {
-	const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
-	return axiosError.response?.data?.ocs?.data?.message ?? fallback
-}
 
 async function loadGitStatus() {
 	try {

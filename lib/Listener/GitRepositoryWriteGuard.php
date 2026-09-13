@@ -26,15 +26,13 @@ namespace OCA\GitCloud\Listener;
  * against a real running instance for a directly-authenticated WebDAV PUT
  * (e.g. curl with Basic Auth, or a third-party sync client's own uploads).
  *
- * KNOWN GAP, also found by driving a real instance: a write made through the
- * Files web app's own browser-session-authenticated upload (e.g. drag-and-drop
- * or the "New > Upload file" button, including its overwrite/conflict flow)
- * does NOT go through this guard - confirmed this isn't .git-specific by
- * reproducing the same gap on a write to an ordinary, unrelated tracked file.
- * Application::boot() (and therefore this connectHook() call) never runs at
- * all for that specific PUT request, even though it reliably runs for every
- * other request in the same browser session, including other DAV requests to
- * the same file moments later. Root cause not identified - see CHANGELOG.
+ * A gap shipped in 0.2.6 - a write through the Files web app's own
+ * browser-session-authenticated upload was not blocked - was root-caused and
+ * closed in 0.2.7: GitCloud declared no <types> in appinfo/info.xml, so
+ * remote.php's filtered loadApps(['filesystem', 'logging']) never loaded the app
+ * and Application::boot() (and therefore this connectHook() call) never ran for
+ * that request. Declaring <types><filesystem/></types> fixed it for both DAV auth
+ * paths; see the 0.2.7 CHANGELOG entry.
  */
 class GitRepositoryWriteGuard {
 	use GitRepositoryPathGuard;

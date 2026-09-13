@@ -4,8 +4,9 @@
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite --mode development build",
+    "build": "node -e \"for (const d of ['js','css']) require('fs').rmSync(d, { recursive: true, force: true })\" && vite build",
+    "clean": "node -e \"for (const d of ['js','css']) require('fs').rmSync(d, { recursive: true, force: true })\"",
+    "dev": "node -e \"for (const d of ['js','css']) require('fs').rmSync(d, { recursive: true, force: true })\" && vite --mode development build",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src",
     "stylelint": "stylelint \"src/**/*.vue\" \"src/**/*.scss\" \"src/**/*.css\"",
     "watch": "vite --mode development build --watch"

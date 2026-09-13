@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Service;
 
+use OCA\GitCloud\Service\BundledGitBinary;
 use OCA\GitCloud\Service\GitArchitecture;
 use OCA\GitCloud\Service\GitStaticBinaryService;
 use OCP\App\AppPathNotFoundException;
@@ -256,7 +257,7 @@ final class GitStaticBinaryServiceTest extends TestCase {
 		$status = $service->getStatus();
 
 		$this->assertSame($arch, $status['architecture']);
-		$this->assertFalse($status['staticGitPresent']);
+		$this->assertFalse(BundledGitBinary::path($appPath, $arch));
 		$this->assertNull($status['installedVersion']);
 		$this->assertSame('v9.9.9-test', $status['pinnedVersion']);
 		$this->assertFalse($status['updateAvailable']);
@@ -282,7 +283,7 @@ final class GitStaticBinaryServiceTest extends TestCase {
 		$this->assertTrue($downloadResult['success']);
 
 		$status = $service->getStatus();
-		$this->assertTrue($status['staticGitPresent']);
+		$this->assertNotFalse(BundledGitBinary::path($appPath, $arch));
 		$this->assertSame('v9.9.9-test', $status['installedVersion']);
 		$this->assertSame('v9.9.9-test', $status['pinnedVersion']);
 		$this->assertFalse($status['updateAvailable']);
@@ -301,7 +302,7 @@ final class GitStaticBinaryServiceTest extends TestCase {
 
 		$status = $service->getStatus();
 
-		$this->assertTrue($status['staticGitPresent']);
+		$this->assertNotFalse(BundledGitBinary::path($appPath, $arch));
 		$this->assertSame('v1.0.0', $status['installedVersion']);
 		$this->assertSame('v2.0.0', $status['pinnedVersion']);
 		$this->assertTrue($status['updateAvailable']);
@@ -324,7 +325,7 @@ final class GitStaticBinaryServiceTest extends TestCase {
 
 		$status = $service->getStatus();
 
-		$this->assertTrue($status['staticGitPresent']);
+		$this->assertNotFalse(BundledGitBinary::path($appPath, $arch));
 		$this->assertNull($status['installedVersion']);
 		$this->assertFalse($status['updateAvailable']);
 	}

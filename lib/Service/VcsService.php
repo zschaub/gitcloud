@@ -16,9 +16,10 @@ use OCP\IAppConfig;
 use Psr\Log\LoggerInterface;
 
 /**
- * Service class handling all version control system logic for GitCloud.
- * In a real-world scenario, this would interface with an actual Git repository
- * accessible to the Nextcloud instance (e.g., via SSH keys or local filesystem mounting).
+ * Every Git operation GitCloud performs. Shells out to a real `git` executable (see
+ * resolveGitBinary()) against a repository stored beside the user's `files` directory
+ * rather than inside it (see resolveGitDirectory()), and records what it did as
+ * `gitcloud_snapshots` rows so the dashboard can list and roll back to them.
  */
 class VcsService {
 	private LoggerInterface $logger;
@@ -27,6 +28,9 @@ class VcsService {
 	private ?IAppManager $appManager;
 	private ?IAppConfig $appConfig;
 	private ?bool $gitAvailable = null;
+	/** @var Snapshot[] */
+	private array $snapshotCache = [];
+	private ?string $snapshotCacheUserId = null;
 	private string|false|null $resolvedGitBinary = null;
 
 	/**
@@ -41,6 +45,14 @@ class VcsService {
 	 * still find and relocate an existing repository.
 	 */
 	public const LEGACY_GIT_DIRECTORY_NAME = '.git';
+
+	/**
+	 * The kinds of change autoCommitChange() records, named the way the log lines
+	 * that embed them read ("... while auto-committing a rename: ...").
+	 */
+	public const AUTO_COMMIT_DELETE = 'a delete';
+	public const AUTO_COMMIT_RENAME = 'a rename';
+	public const AUTO_COMMIT_RESTORE = 'a restore';
 
 	public const GIT_NOT_INSTALLED_MESSAGE = 'git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.';
 	public const GIT_STATIC_SELECTED_BUT_MISSING_MESSAGE = 'Static git was selected in Settings > Administration > GitCloud, but no bundled binary has been downloaded for this server yet. Download it from that settings page, or switch back to "Automatic" or "System git".';
@@ -154,8 +166,7 @@ class VcsService {
 			return false;
 		}
 
-		$candidate = $appPath . '/bin/' . $arch . '/git';
-		return (is_file($candidate) && is_executable($candidate)) ? $candidate : false;
+		return BundledGitBinary::path($appPath, $arch);
 	}
 
 	/**
@@ -183,13 +194,16 @@ class VcsService {
 	/**
 	 * Builds a real error message for a failed proc_open() call (e.g. resource limits,
 	 * a cwd that vanished mid-request, permission issues) from PHP's own last-error
-	 * state, instead of a generic "something went wrong" placeholder. Callers must
-	 * call error_clear_last() immediately before their proc_open() so this reflects
-	 * that call's own failure and not a stale, unrelated warning.
+	 * state, instead of a generic "something went wrong" placeholder. Only called from
+	 * runProcess(), which clears the last error immediately before its proc_open() so
+	 * this reflects that call's own failure and not a stale, unrelated warning.
+	 *
+	 * $executable is named in the message so a failure to start `tar` (the history
+	 * backup) doesn't report itself as a git failure.
 	 */
-	private function describeProcOpenFailure(): string {
+	private function describeProcOpenFailure(string $executable): string {
 		$lastError = error_get_last();
-		return sprintf('Unable to start the git process: %s', $lastError['message'] ?? 'unknown error');
+		return sprintf('Unable to start the %s process: %s', basename($executable), $lastError['message'] ?? 'unknown error');
 	}
 
 	/**
@@ -255,11 +269,7 @@ class VcsService {
 			return ['success' => false, 'message' => sprintf('Failed to commit changes: %s', $commitResult['output'])];
 		}
 
-		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
-		if (!$headResult['success']) {
-			$this->logger->warning(sprintf('git rev-parse HEAD failed after commit: %s', $headResult['output']));
-		}
-		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
+		$commitHash = $this->readHeadCommitHash($repositoryPath, 'after commit');
 
 		foreach ($relativeFiles as $file) {
 			// Chained by fileid, not path, so a file deleted and later recreated at
@@ -278,6 +288,24 @@ class VcsService {
 	}
 
 	/**
+	 * Reads back the hash of the commit that was just created. A failure here is
+	 * logged but not fatal: the commit itself already succeeded, and a snapshot row
+	 * with an empty hash is better than losing the row entirely (rollback to such a
+	 * snapshot is rejected later with a clear "no associated commit" message).
+	 *
+	 * @param string $context Phrase describing when this ran, e.g. "after commit".
+	 */
+	private function readHeadCommitHash(string $repositoryPath, string $context): string {
+		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
+		if (!$headResult['success']) {
+			$this->logger->warning(sprintf('git rev-parse HEAD failed %s: %s', $context, $headResult['output']));
+			return '';
+		}
+
+		return trim($headResult['output']);
+	}
+
+	/**
 	 * Reacts to a GitCloud-tracked file being deleted outside GitCloud (Files app,
 	 * WebDAV, sync clients, etc.) by staging its removal and auto-committing it
 	 * immediately, so the repository and dashboard stay in sync with reality
@@ -285,43 +313,20 @@ class VcsService {
 	 * @return array{success: bool, message: string}
 	 */
 	public function autoCommitDelete(string $repositoryPath, string $relativeFilePath, int $fileId, string $userId): array {
-		if (!is_dir($repositoryPath) || !$this->hasRepository($repositoryPath)) {
-			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
-		}
-
 		// The path is already missing from the working tree (Nextcloud already
 		// deleted it), so `git add` on it stages the deletion exactly like `git rm`
 		// would - the same staging idiom used everywhere else in this class.
-		$addResult = $this->runGit($repositoryPath, ['add', '--', $relativeFilePath]);
-		if (!$addResult['success']) {
-			$this->logger->warning(sprintf('git add failed while auto-committing a delete: %s', $addResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to stage deletion: %s', $addResult['output'])];
-		}
-
-		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
-		if ($stagedDiffResult['success']) {
-			return ['success' => false, 'message' => 'Nothing to auto-commit for the deleted file.'];
-		}
-
-		$message = sprintf('Auto-commit: deleted %s', $relativeFilePath);
-		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
-		if (!$commitResult['success']) {
-			$this->logger->info(sprintf('git commit did not succeed while auto-committing a delete: %s', $commitResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to auto-commit deletion: %s', $commitResult['output'])];
-		}
-
-		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
-		if (!$headResult['success']) {
-			$this->logger->warning(sprintf('git rev-parse HEAD failed after auto-committing a delete: %s', $headResult['output']));
-		}
-		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
-
-		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
-		$parentSnapshotId = $parentSnapshot?->getId();
-		$this->createSnapshotRecord($userId, $relativeFilePath, $commitHash, $message, $parentSnapshotId, 'deleted', $fileId);
-
-		$this->logger->info(sprintf('Auto-committed deletion of %s', $relativeFilePath));
-		return ['success' => true, 'message' => sprintf('Auto-committed deletion of %s.', $relativeFilePath)];
+		return $this->autoCommitChange(
+			$repositoryPath,
+			self::AUTO_COMMIT_DELETE,
+			[$relativeFilePath],
+			sprintf('Auto-commit: deleted %s', $relativeFilePath),
+			$relativeFilePath,
+			'deleted',
+			$fileId,
+			$userId,
+			sprintf('Auto-committed deletion of %s', $relativeFilePath),
+		);
 	}
 
 	/**
@@ -334,40 +339,17 @@ class VcsService {
 	 * @return array{success: bool, message: string}
 	 */
 	public function autoCommitRename(string $repositoryPath, string $oldRelativePath, string $newRelativePath, int $fileId, string $userId): array {
-		if (!is_dir($repositoryPath) || !$this->hasRepository($repositoryPath)) {
-			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
-		}
-
-		$addResult = $this->runGit($repositoryPath, ['add', '--', $oldRelativePath, $newRelativePath]);
-		if (!$addResult['success']) {
-			$this->logger->warning(sprintf('git add failed while auto-committing a rename: %s', $addResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to stage rename: %s', $addResult['output'])];
-		}
-
-		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
-		if ($stagedDiffResult['success']) {
-			return ['success' => false, 'message' => 'Nothing to auto-commit for the renamed file.'];
-		}
-
-		$message = sprintf('Auto-commit: renamed %s to %s', $oldRelativePath, $newRelativePath);
-		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
-		if (!$commitResult['success']) {
-			$this->logger->info(sprintf('git commit did not succeed while auto-committing a rename: %s', $commitResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to auto-commit rename: %s', $commitResult['output'])];
-		}
-
-		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
-		if (!$headResult['success']) {
-			$this->logger->warning(sprintf('git rev-parse HEAD failed after auto-committing a rename: %s', $headResult['output']));
-		}
-		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
-
-		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
-		$parentSnapshotId = $parentSnapshot?->getId();
-		$this->createSnapshotRecord($userId, $newRelativePath, $commitHash, $message, $parentSnapshotId, 'committed', $fileId);
-
-		$this->logger->info(sprintf('Auto-committed rename of %s to %s', $oldRelativePath, $newRelativePath));
-		return ['success' => true, 'message' => sprintf('Auto-committed rename of %s to %s.', $oldRelativePath, $newRelativePath)];
+		return $this->autoCommitChange(
+			$repositoryPath,
+			self::AUTO_COMMIT_RENAME,
+			[$oldRelativePath, $newRelativePath],
+			sprintf('Auto-commit: renamed %s to %s', $oldRelativePath, $newRelativePath),
+			$newRelativePath,
+			'committed',
+			$fileId,
+			$userId,
+			sprintf('Auto-committed rename of %s to %s', $oldRelativePath, $newRelativePath),
+		);
 	}
 
 	/**
@@ -383,43 +365,80 @@ class VcsService {
 	 * @return array{success: bool, message: string}
 	 */
 	public function autoCommitRestore(string $repositoryPath, string $relativeFilePath, int $fileId, string $userId): array {
+		return $this->autoCommitChange(
+			$repositoryPath,
+			self::AUTO_COMMIT_RESTORE,
+			[$relativeFilePath],
+			sprintf('Auto-commit: restored %s', $relativeFilePath),
+			$relativeFilePath,
+			// Status 'committed', not 'deleted' - this is what clears the file's prior
+			// Deleted dashboard state, the same convention rollbackToSnapshot already
+			// uses to clear it when a user explicitly rolls back a deleted file.
+			'committed',
+			$fileId,
+			$userId,
+			sprintf('Auto-committed restore of %s', $relativeFilePath),
+		);
+	}
+
+	/**
+	 * The shared body of the three autoCommit* methods above, which only ever differed
+	 * in which path(s) they stage, what they call the change, and which status they
+	 * record - never in the sequence itself (stage -> bail out if nothing was actually
+	 * staged -> commit -> read back the hash -> record a snapshot chained by file id).
+	 * Keeping that sequence in one place is what stops the three from drifting apart.
+	 *
+	 * @param self::AUTO_COMMIT_* $changeKind Used only to phrase messages and log lines.
+	 * @param list<string> $stagePaths Paths to `git add`, relative to $repositoryPath.
+	 * @param string $snapshotFilePath Path the resulting snapshot row is recorded under.
+	 * @param string $successMessage Human-readable summary, without trailing punctuation.
+	 * @return array{success: bool, message: string}
+	 */
+	private function autoCommitChange(
+		string $repositoryPath,
+		string $changeKind,
+		array $stagePaths,
+		string $commitMessage,
+		string $snapshotFilePath,
+		string $snapshotStatus,
+		int $fileId,
+		string $userId,
+		string $successMessage,
+	): array {
 		if (!is_dir($repositoryPath) || !$this->hasRepository($repositoryPath)) {
 			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
 		}
 
-		$addResult = $this->runGit($repositoryPath, ['add', '--', $relativeFilePath]);
+		[$stageFailure, $nothingStaged, $commitFailure] = match ($changeKind) {
+			self::AUTO_COMMIT_DELETE => ['Failed to stage deletion', 'Nothing to auto-commit for the deleted file.', 'Failed to auto-commit deletion'],
+			self::AUTO_COMMIT_RENAME => ['Failed to stage rename', 'Nothing to auto-commit for the renamed file.', 'Failed to auto-commit rename'],
+			self::AUTO_COMMIT_RESTORE => ['Failed to stage restored file', 'Nothing to auto-commit for the restored file.', 'Failed to auto-commit restore'],
+		};
+
+		$addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $stagePaths));
 		if (!$addResult['success']) {
-			$this->logger->warning(sprintf('git add failed while auto-committing a restore: %s', $addResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to stage restored file: %s', $addResult['output'])];
+			$this->logger->warning(sprintf('git add failed while auto-committing %s: %s', $changeKind, $addResult['output']));
+			return ['success' => false, 'message' => sprintf('%s: %s', $stageFailure, $addResult['output'])];
 		}
 
 		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
 		if ($stagedDiffResult['success']) {
-			return ['success' => false, 'message' => 'Nothing to auto-commit for the restored file.'];
+			return ['success' => false, 'message' => $nothingStaged];
 		}
 
-		$message = sprintf('Auto-commit: restored %s', $relativeFilePath);
-		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $commitMessage]);
 		if (!$commitResult['success']) {
-			$this->logger->info(sprintf('git commit did not succeed while auto-committing a restore: %s', $commitResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to auto-commit restore: %s', $commitResult['output'])];
+			$this->logger->info(sprintf('git commit did not succeed while auto-committing %s: %s', $changeKind, $commitResult['output']));
+			return ['success' => false, 'message' => sprintf('%s: %s', $commitFailure, $commitResult['output'])];
 		}
 
-		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
-		if (!$headResult['success']) {
-			$this->logger->warning(sprintf('git rev-parse HEAD failed after auto-committing a restore: %s', $headResult['output']));
-		}
-		$commitHash = $headResult['success'] ? trim($headResult['output']) : '';
+		$commitHash = $this->readHeadCommitHash($repositoryPath, sprintf('after auto-committing %s', $changeKind));
 
 		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
-		$parentSnapshotId = $parentSnapshot?->getId();
-		// Status 'committed', not 'deleted' - this is what clears the file's prior
-		// Deleted dashboard state, the same convention rollbackToSnapshot already
-		// uses to clear it when a user explicitly rolls back a deleted file.
-		$this->createSnapshotRecord($userId, $relativeFilePath, $commitHash, $message, $parentSnapshotId, 'committed', $fileId);
+		$this->createSnapshotRecord($userId, $snapshotFilePath, $commitHash, $commitMessage, $parentSnapshot?->getId(), $snapshotStatus, $fileId);
 
-		$this->logger->info(sprintf('Auto-committed restore of %s', $relativeFilePath));
-		return ['success' => true, 'message' => sprintf('Auto-committed restore of %s.', $relativeFilePath)];
+		$this->logger->info($successMessage);
+		return ['success' => true, 'message' => $successMessage . '.'];
 	}
 
 	/**
@@ -505,6 +524,48 @@ class VcsService {
 	}
 
 	/**
+	 * Runs an external command without invoking a shell (so no argument escaping is
+	 * needed anywhere), capturing stdout and stderr together. The single place this
+	 * class starts a subprocess - shared by runGit()/runGitConfigGet()/runGitConfigSet()
+	 * and the backup tarball - so proc_open's failure handling, pipe draining and
+	 * output trimming can't drift apart between them.
+	 *
+	 * Only *trailing* whitespace is trimmed: `git status --porcelain`'s leading
+	 * status-code column can itself be a space (e.g. " M" for "modified, not
+	 * staged"), which a full trim() would silently eat from the first line.
+	 *
+	 * @param list<string> $argv
+	 * @param string|null $cwd Working directory, or null to inherit the current one.
+	 * @return array{success: bool, output: string}
+	 */
+	private function runProcess(array $argv, ?string $cwd = null): array {
+		// Suppressed: a failure here is deliberately captured via error_get_last()
+		// in describeProcOpenFailure() rather than left to PHP's own warning.
+		error_clear_last();
+		$process = @proc_open(
+			$argv,
+			[
+				1 => ['pipe', 'w'],
+				2 => ['pipe', 'w'],
+			],
+			$pipes,
+			$cwd,
+		);
+
+		if (!is_resource($process)) {
+			return ['success' => false, 'output' => $this->describeProcOpenFailure($argv[0] ?? 'git')];
+		}
+
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$exitCode = proc_close($process);
+
+		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr)];
+	}
+
+	/**
 	 * Runs a git command in $cwd without invoking a shell, avoiding any need for argument escaping.
 	 * @param string[] $args
 	 * @return array{success: bool, output: string}
@@ -553,37 +614,11 @@ class VcsService {
 			}
 		}
 
-		// Suppressed: a failure here is deliberately captured via error_get_last()
-		// in describeProcOpenFailure() below rather than left to PHP's own warning.
-		error_clear_last();
-		$process = @proc_open(
-			array_merge([$gitBinary], $this->gitLocationArgs($cwd), $args),
-			[
-				1 => ['pipe', 'w'],
-				2 => ['pipe', 'w'],
-			],
-			$pipes,
-			$cwd,
-		);
-
-		if (!is_resource($process)) {
-			return ['success' => false, 'output' => $this->describeProcOpenFailure()];
-		}
-
-		$stdout = stream_get_contents($pipes[1]);
-		$stderr = stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$exitCode = proc_close($process);
-
-		return [
-			'success' => $exitCode === 0,
-			// Only trailing whitespace is trimmed here: `git status --porcelain`'s
-			// leading status-code column can itself be a space (e.g. " M" for
-			// "modified, not staged"), which a full trim() would silently eat from
-			// the very first line of output.
-			'output' => rtrim($stdout . "\n" . $stderr),
-		];
+		// Only trailing whitespace is trimmed by runProcess(): `git status --porcelain`'s
+		// leading status-code column can itself be a space (e.g. " M" for "modified,
+		// not staged"), which a full trim() would silently eat from the very first
+		// line of output.
+		return $this->runProcess(array_merge([$gitBinary], $this->gitLocationArgs($cwd), $args), $cwd);
 	}
 
 	/**
@@ -595,30 +630,7 @@ class VcsService {
 			return ['success' => false, 'output' => $this->gitUnavailableMessage()];
 		}
 
-		// Suppressed: a failure here is deliberately captured via error_get_last()
-		// in describeProcOpenFailure() below rather than left to PHP's own warning.
-		error_clear_last();
-		$process = @proc_open(
-			array_merge([$gitBinary], $this->gitLocationArgs($cwd), ['config', '--get', $key]),
-			[
-				1 => ['pipe', 'w'],
-				2 => ['pipe', 'w'],
-			],
-			$pipes,
-			$cwd,
-		);
-
-		if (!is_resource($process)) {
-			return ['success' => false, 'output' => $this->describeProcOpenFailure()];
-		}
-
-		$stdout = stream_get_contents($pipes[1]);
-		$stderr = stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$exitCode = proc_close($process);
-
-		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr)];
+		return $this->runProcess(array_merge([$gitBinary], $this->gitLocationArgs($cwd), ['config', '--get', $key]), $cwd);
 	}
 
 	/**
@@ -630,30 +642,7 @@ class VcsService {
 			return ['success' => false, 'output' => $this->gitUnavailableMessage()];
 		}
 
-		// Suppressed: a failure here is deliberately captured via error_get_last()
-		// in describeProcOpenFailure() below rather than left to PHP's own warning.
-		error_clear_last();
-		$process = @proc_open(
-			array_merge([$gitBinary], $this->gitLocationArgs($cwd), ['config', $key, $value]),
-			[
-				1 => ['pipe', 'w'],
-				2 => ['pipe', 'w'],
-			],
-			$pipes,
-			$cwd,
-		);
-
-		if (!is_resource($process)) {
-			return ['success' => false, 'output' => $this->describeProcOpenFailure()];
-		}
-
-		$stdout = stream_get_contents($pipes[1]);
-		$stderr = stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$exitCode = proc_close($process);
-
-		return ['success' => $exitCode === 0, 'output' => rtrim($stdout . "\n" . $stderr)];
+		return $this->runProcess(array_merge([$gitBinary], $this->gitLocationArgs($cwd), ['config', $key, $value]), $cwd);
 	}
 
 	/**
@@ -800,19 +789,21 @@ class VcsService {
 			return ['success' => false, 'message' => sprintf('Failed to commit restored file: %s', $commitResult['output'])];
 		}
 
-		$headResult = $this->runGit($repositoryPath, ['rev-parse', 'HEAD']);
-		if (!$headResult['success']) {
-			$this->logger->warning(sprintf('git rev-parse HEAD failed after rollback: %s', $headResult['output']));
-		}
-		$newCommitHash = $headResult['success'] ? trim($headResult['output']) : '';
+		$newCommitHash = $this->readHeadCommitHash($repositoryPath, 'after rollback');
 
-		$previousSnapshots = $this->getSnapshotsForFile($userId, $relativeFilePath);
-		$parentSnapshotId = isset($previousSnapshots[0]) ? $previousSnapshots[0]->getId() : null;
+		// Chained by file id, like commitChanges() and autoCommitChange(), so the new
+		// row hangs off the file's real latest snapshot even if that was recorded
+		// under a different path (i.e. the file has since been renamed). Falls back to
+		// a path lookup only for legacy rows predating the file_id migration.
+		$fileId = $snapshot->getFileId();
+		$parentSnapshot = $fileId !== null
+			? $this->snapshotMapper->findLatestForFileId($userId, $fileId)
+			: ($this->getSnapshotsForFile($userId, $relativeFilePath)[0] ?? null);
 		// Carries the fileid of the snapshot being restored forward onto the new
 		// row. This also correctly handles rolling back an already-deleted file
 		// (no live Node to source a fileid from), and its non-'deleted' status
 		// is what clears a prior 'Deleted' dashboard state, with no special-casing.
-		$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshotId, 'rolled_back', $snapshot->getFileId());
+		$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshot?->getId(), 'rolled_back', $fileId);
 
 		$this->logger->info(sprintf('Rolled back %s to snapshot #%d', $relativeFilePath, $snapshotId));
 		return [
@@ -843,6 +834,8 @@ class VcsService {
 		$snapshot->setFileId($fileId);
 		$snapshot->setCreatedAt($this->timeFactory->getTime());
 
+		$this->invalidateSnapshotCache();
+
 		return $this->snapshotMapper->insert($snapshot);
 	}
 
@@ -851,16 +844,6 @@ class VcsService {
 	 */
 	public function getSnapshotsForFile(string $userId, string $filePath): array {
 		return $this->snapshotMapper->findAllForFile($userId, $filePath);
-	}
-
-	/**
-	 * @throws DoesNotExistException
-	 */
-	public function updateSnapshotStatus(int $snapshotId, string $status): Snapshot {
-		$snapshot = $this->snapshotMapper->find($snapshotId);
-		$snapshot->setStatus($status);
-
-		return $this->snapshotMapper->update($snapshot);
 	}
 
 	/**
@@ -888,6 +871,8 @@ class VcsService {
 		} else {
 			$this->snapshotMapper->deleteAllForFile($userId, $relativeFilePath);
 		}
+
+		$this->invalidateSnapshotCache();
 
 		$this->logger->info(sprintf('Stopped tracking %s in GitCloud.', $relativeFilePath));
 		return ['success' => true, 'message' => sprintf('Stopped tracking %s.', $relativeFilePath)];
@@ -937,6 +922,45 @@ class VcsService {
 	}
 
 	/**
+	 * Every snapshot row for a user, newest first, fetched at most once per user per
+	 * request. A dashboard load reads the same rows from several angles (directory
+	 * grouping, per-file latest status), and VcsService is constructed fresh per
+	 * request, so memoizing here turns those into one query instead of one each.
+	 * Invalidated by createSnapshotRecord()/untrackFile()/deleteHistory(), the only
+	 * things in this class that change the rows.
+	 * @return Snapshot[]
+	 */
+	private function allSnapshotsForUser(string $userId): array {
+		if ($this->snapshotCacheUserId !== $userId) {
+			$this->snapshotCache = $this->snapshotMapper->findAllForUser($userId);
+			$this->snapshotCacheUserId = $userId;
+		}
+
+		return $this->snapshotCache;
+	}
+
+	private function invalidateSnapshotCache(): void {
+		$this->snapshotCache = [];
+		$this->snapshotCacheUserId = null;
+	}
+
+	/**
+	 * Each committed path mapped to the status of its most recent snapshot, so a
+	 * caller can tell "deleted outside GitCloud" from "still tracked" for every file
+	 * at once instead of querying per path.
+	 * @return array<string, string>
+	 */
+	public function getLatestStatusByFilePath(string $userId): array {
+		$statuses = [];
+		foreach ($this->allSnapshotsForUser($userId) as $snapshot) {
+			// Newest first, so the first row seen for a path is already its latest.
+			$statuses[ltrim($snapshot->getFilePath(), '/')] ??= $snapshot->getStatus();
+		}
+
+		return $statuses;
+	}
+
+	/**
 	 * Groups the user's ever-committed files by directory, for the dashboard's
 	 * committed-directories list. A file with no directory component (i.e. at
 	 * the repository root) is grouped under "/".
@@ -944,7 +968,7 @@ class VcsService {
 	 */
 	public function getCommittedDirectories(string $userId): array {
 		$filesByDirectory = [];
-		foreach ($this->snapshotMapper->findAllForUser($userId) as $snapshot) {
+		foreach ($this->allSnapshotsForUser($userId) as $snapshot) {
 			$filePath = ltrim($snapshot->getFilePath(), '/');
 			$filesByDirectory[$this->directoryOf($filePath)][$filePath] = true;
 		}
@@ -1002,6 +1026,7 @@ class VcsService {
 		}
 
 		$this->snapshotMapper->deleteAllForUser($userId);
+		$this->invalidateSnapshotCache();
 
 		$this->logger->info(sprintf('Deleted all Git history for user %s', $userId));
 		return ['success' => true, 'message' => 'All commit history has been permanently deleted.'];
@@ -1028,35 +1053,11 @@ class VcsService {
 		$gitDirectory = $this->resolveGitDirectory($repositoryPath);
 		$backupPath = sys_get_temp_dir() . '/gitcloud-backup-' . bin2hex(random_bytes(8)) . '.tar.gz';
 
-		// Suppressed: a failure here is deliberately captured via error_get_last()
-		// below rather than left to PHP's own warning, mirroring runGit()'s pattern.
-		error_clear_last();
-		$process = @proc_open(
-			['tar', '-czf', $backupPath, '-C', dirname($gitDirectory), basename($gitDirectory)],
-			[
-				1 => ['pipe', 'w'],
-				2 => ['pipe', 'w'],
-			],
-			$pipes,
-		);
-
-		if (!is_resource($process)) {
-			$lastError = error_get_last();
-			$this->logger->warning(sprintf('Unable to start the tar process: %s', $lastError['message'] ?? 'unknown error'));
-			return ['success' => false, 'message' => 'Unable to create a backup archive.'];
-		}
-
-		// Drained but discarded: tar writes nothing meaningful to stdout for -czf.
-		stream_get_contents($pipes[1]);
-		$stderr = stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$exitCode = proc_close($process);
-
-		if ($exitCode !== 0) {
+		$tarResult = $this->runProcess(['tar', '-czf', $backupPath, '-C', dirname($gitDirectory), basename($gitDirectory)]);
+		if (!$tarResult['success']) {
 			@unlink($backupPath);
-			$this->logger->warning(sprintf('tar failed while creating a history backup: %s', trim($stderr)));
-			return ['success' => false, 'message' => sprintf('Failed to create backup archive: %s', trim($stderr))];
+			$this->logger->warning(sprintf('tar failed while creating a history backup: %s', $tarResult['output']));
+			return ['success' => false, 'message' => sprintf('Failed to create backup archive: %s', trim($tarResult['output']))];
 		}
 
 		$this->logger->info(sprintf('Created a Git history backup archive for user %s', $userId));

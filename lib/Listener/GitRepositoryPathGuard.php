@@ -8,11 +8,16 @@ use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 
 /**
- * Shared by the Before* listeners that guard GitCloud's own .git repository
- * against being deleted, renamed, or written to directly through Nextcloud's
- * normal file operations (Files app, WebDAV, sync clients, occ, ...), which
- * would otherwise be free to corrupt it - .git sits on disk at the root of the
- * user's own Nextcloud storage rather than somewhere GitCloud can hide it.
+ * Shared by the Before* listeners that guard a `.git` directory at the root of a
+ * user's Nextcloud storage against being deleted, renamed, or written to through
+ * Nextcloud's normal file operations (Files app, WebDAV, sync clients, occ, ...).
+ *
+ * Since 0.2.8 GitCloud's own repository no longer lives there - it sits beside the
+ * user's `files` directory, outside their storage entirely, where none of those
+ * channels can reach it (see VcsService::resolveGitDirectory()). These guards are
+ * kept as belt-and-braces rather than the only line of defense: they still protect
+ * an install that hasn't run the relocation repair step yet, and anyone who has a
+ * `.git` directory in their files for unrelated reasons.
  */
 trait GitRepositoryPathGuard {
 	private function isInsideGitRepository(Node $node, IRootFolder $rootFolder): bool {

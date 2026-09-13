@@ -13,6 +13,7 @@ import LinkOffIcon from '@mdi/svg/svg/link-off.svg?raw'
 import { ref, computed, onMounted } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
+import { extractErrorMessage } from './utils/ocs'
 
 const fileCount = ref(0)
 const dirCount = ref(0)
@@ -52,11 +53,6 @@ async function loadDirectoryStatus(directory: string) {
 		directoryGitStatus.value = 'Unknown'
 		directoryStatusError.value = extractErrorMessage(error, 'Failed to load directory status.')
 	}
-}
-
-function extractErrorMessage(error: unknown, fallback: string): string {
-	const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
-	return axiosError.response?.data?.ocs?.data?.message ?? fallback
 }
 
 interface CommittedFile {

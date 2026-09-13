@@ -5,6 +5,8 @@ import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
 import { ref, computed, watch } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
+import { extractErrorMessage } from '../utils/ocs'
+import { fileName } from '../utils/path'
 
 const props = defineProps<{
     open: boolean;
@@ -38,10 +40,6 @@ watch(
 		}
 	},
 )
-
-function fileName(path: string): string {
-	return path.split('/').pop() ?? path
-}
 
 const title = computed(() =>
 	props.files.length > 1 ? `Commit ${props.files.length} files` : 'Commit file',
@@ -78,9 +76,7 @@ async function submitCommit() {
 		emit('committed')
 	} catch (error) {
 		status.value = 'error'
-		const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
-		resultMessage.value
-            = axiosError.response?.data?.ocs?.data?.message ?? 'Failed to commit changes to GitCloud.'
+		resultMessage.value = extractErrorMessage(error, 'Failed to commit changes to GitCloud.')
 	}
 	return false
 }
@@ -97,9 +93,7 @@ async function confirmCommit() {
 	} catch (error) {
 		pendingConfirmation.value = false
 		status.value = 'error'
-		const axiosError = error as { response?: { data?: { ocs?: { data?: { message?: string } } } } }
-		resultMessage.value
-            = axiosError.response?.data?.ocs?.data?.message ?? 'Failed to commit changes to GitCloud.'
+		resultMessage.value = extractErrorMessage(error, 'Failed to commit changes to GitCloud.')
 	} finally {
 		isConfirming.value = false
 	}
