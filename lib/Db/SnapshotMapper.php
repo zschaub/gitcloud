@@ -42,7 +42,8 @@ class SnapshotMapper extends QBMapper {
 			->select('*')
 			->from($this->getTableName())
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
-			->orderBy('created_at', 'DESC');
+			->orderBy('created_at', 'DESC')
+			->addOrderBy('id', 'DESC');
 
 		return $this->findEntities($select);
 	}
@@ -89,7 +90,8 @@ class SnapshotMapper extends QBMapper {
 			->from($this->getTableName())
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('file_path', $qb->createNamedParameter($filePath)))
-			->orderBy('created_at', 'DESC');
+			->orderBy('created_at', 'DESC')
+			->addOrderBy('id', 'DESC');
 
 		return $this->findEntities($select);
 	}
@@ -103,6 +105,7 @@ class SnapshotMapper extends QBMapper {
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
 			->andWhere($qb->expr()->eq('file_id', $qb->createNamedParameter($fileId, $qb::PARAM_INT)))
 			->orderBy('created_at', 'DESC')
+			->addOrderBy('id', 'DESC')
 			->setMaxResults(1);
 
 		try {
