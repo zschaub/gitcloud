@@ -13,9 +13,18 @@ export const addToGitCloudAction = {
 
 	iconSvgInline: () => CloudIcon,
 
-	// return false/undefined to hide, true to show
-	enabled() {
-		return true
+	// return false/undefined to hide, true to show.
+	// GitCloud's repository working tree is the user's own home storage only, so
+	// hide the action on anything sitting on another mount - group folders,
+	// received shares, external storages. `nc:mount-type` is part of
+	// @nextcloud/files' default PROPFIND set and is computed per node from its
+	// mount point, so it is populated for every descendant of a mount and not
+	// just the mount root; it is '' for the plain home mount. Any non-empty value
+	// hides the action, rather than matching a specific mount type, so a mount
+	// type GitCloud has never heard of is hidden too. The backend check remains
+	// authoritative - a home folder containing a nested mount still passes here.
+	enabled(context) {
+		return context.nodes.every((node) => !node.attributes?.['mount-type'])
 	},
 
 	// false = never inline, only shows in the "..." / right-click menu

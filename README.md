@@ -8,6 +8,7 @@
 ## Requirements
 
 - **The `git` binary must be installed and on the `PATH` of the user running PHP** (e.g. `www-data`/php-fpm) on the Nextcloud server, unless a bundled static binary is fetched either via `composer fetch-git-static` or, since 0.2.5, directly from **Settings > Administration > GitCloud** (see the "Integrate static git into GitCloud" Phase 3 item below — 🚧 not yet verified end-to-end in a real running instance, so PATH-installed git remains the documented, safe default for now). An admin can choose between **Automatic** (prefer bundled static git, fall back to system git — the default), **System git** (always use PATH git), or **Static git** (always use the bundled binary, with a "Download static git" button when one isn't present yet) from that settings page. GitCloud has no PHP git library either way — every operation (`VcsService::runGit`/`runGitConfigGet`/`runGitConfigSet`) shells out directly to a `git` executable via `proc_open`. If no git binary can be found (bundled or on PATH, per the selected mode), commit/rollback/status requests fail with a clear error message rather than a generic one.
+- **Files must be in the user's own personal files.** GitCloud's Git working tree is the user's home storage only (`<data>/<user>/files`), so **group folders, shared folders received from other users, and external storages are not supported** — their files physically live elsewhere (a group folder's under `<data>/__groupfolders/<id>/`) and can't be addressed inside the repository. Since 0.2.10 GitCloud says so up front: "Add to GitCloud" doesn't appear on those files, and a commit that reaches one (e.g. a personal folder with a group folder nested inside it) is rejected with a clear message naming the offending path, rather than failing with a raw git error. Group folder support is a roadmap item — see Phase 3 below.
 - **PHP 8.1+** (see `composer.json`).
 - **Composer**, only needed to install PHP dependencies and generate the autoloader (`vendor/` is not committed to the repo).
 - **Node ^20 and npm ^11**, only needed to build the frontend assets (see `package.json`).
@@ -26,6 +27,7 @@
 ## Usage
 
 1. **Commit a file or folder.** In the Nextcloud Files app, right-click any file or folder and choose **Add to GitCloud** from the context menu. Enter a commit message and confirm — the file (or, for a folder, every file inside it, including nested subfolders) is staged and committed to GitCloud's Git repository.
+   - *Only files in your own personal files can be committed* (see Requirements): the action is hidden on group folders, shared folders and external storages, and committing a personal folder containing one of those is rejected with a message naming the path responsible.
 2. **Open the GitCloud tab.** Select **GitCloud** from the Nextcloud left navigation to open the dashboard.
    - **Overview** lists every directory you've committed files under, with aggregate stats (files tracked, directories, total size, Git status) and a search box to filter the list.
    - Selecting a directory switches to **Directory Detail**, showing that directory's committed files with a per-file status of Modified, Unchanged, Uncommitted (present on disk but never committed), or Deleted. The Committed Directories list on Overview also shows "N modified"/"N uncommitted" pills per directory. From here you can select files and commit further changes, or open a file's **History** to view its snapshot timeline and roll back to an earlier version.
@@ -70,6 +72,7 @@ We will tackle this project in progressive phases to ensure stability and testab
 ### 🔮 Phase 3: Advanced Features (Ready to Start)
 
 **Goal:** Exploration and polish once core operations are stable and tested in real usage. All prerequisites (verifying prior-phase work holds up in the real running instance) are cleared — see the Phase 3 kanban.
+- Group folder support (a per-group-folder repository with shared history) — GitCloud is home-storage-only today; as of 0.2.10 it fails fast with a clear message on group folders, shared folders and external storages instead of a raw git pathspec error, but actually supporting them needs a repository per group folder rather than per user
 - Compare snapshots
 - Manage branches visually
 - Delete commits (a targeted removal of individual commits from history — distinct from the existing Personal Settings option to wipe a user's *entire* GitCloud history at once)

@@ -221,6 +221,111 @@ final class ApiTest extends TestCase {
 		$this->assertStringContainsString('folder/mount', $response->getData()['message']);
 	}
 
+	public function testCommitChangesFailsWhenFileIsOnAGroupFolderStorage(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$homeStorage = $this->createMock(IStorage::class);
+		$homeStorage->method('isLocal')->willReturn(true);
+		$homeStorage->method('getId')->willReturn('home::testuser');
+		$homeStorage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		// A group folder is a separate mount inside files/ whose bytes live under
+		// <data>/__groupfolders/<numericId>/ - local (so isLocal() passes), but
+		// not inside the user's home storage, i.e. not in the Git working tree.
+		$groupFolderStorage = $this->createMock(IStorage::class);
+		$groupFolderStorage->method('isLocal')->willReturn(true);
+		$groupFolderStorage->method('getId')->willReturn('local::/data/__groupfolders/3/');
+
+		$file = $this->createMock(Node::class);
+		$file->method('getStorage')->willReturn($groupFolderStorage);
+		$file->method('getPath')->willReturn('/testuser/files/Team Folder/report.md');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($homeStorage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('Team Folder/report.md')->willReturn($file);
+		$userFolder->method('getRelativePath')->willReturnMap([
+			['/testuser/files/Team Folder/report.md', '/Team Folder/report.md'],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->commitChanges(['Team Folder/report.md'], 'Initial commit');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertStringContainsString('can only track files in your personal files', $response->getData()['message']);
+		$this->assertStringContainsString('Team Folder/report.md', $response->getData()['message']);
+	}
+
+	public function testCommitChangesFailsWhenFolderContainsNestedDifferentStorageMount(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$homeStorage = $this->createMock(IStorage::class);
+		$homeStorage->method('isLocal')->willReturn(true);
+		$homeStorage->method('getId')->willReturn('home::testuser');
+		$homeStorage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		// folder/ is on the user's own home storage, but has a received share
+		// (local bytes, different storage) mounted inside it.
+		$sharedStorage = $this->createMock(IStorage::class);
+		$sharedStorage->method('isLocal')->willReturn(true);
+		$sharedStorage->method('getId')->willReturn('shared::/folder/shared.txt');
+
+		$fileA = $this->createMock(Node::class);
+		$fileA->method('getStorage')->willReturn($homeStorage);
+		$fileA->method('getPath')->willReturn('/testuser/files/folder/a.txt');
+
+		$sharedFile = $this->createMock(Node::class);
+		$sharedFile->method('getStorage')->willReturn($sharedStorage);
+		$sharedFile->method('getPath')->willReturn('/testuser/files/folder/shared.txt');
+
+		$folder = $this->createMock(Folder::class);
+		$folder->method('getStorage')->willReturn($homeStorage);
+		$folder->method('getDirectoryListing')->willReturn([$fileA, $sharedFile]);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($homeStorage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->with('folder')->willReturn($folder);
+		$userFolder->method('getRelativePath')->willReturnMap([
+			['/testuser/files/folder/a.txt', '/folder/a.txt'],
+			['/testuser/files/folder/shared.txt', '/folder/shared.txt'],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->commitChanges(['folder'], 'Initial commit');
+
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertStringContainsString('folder/shared.txt', $response->getData()['message']);
+	}
+
 	public function testCommitChangesFailsWithoutFilesOrMessage(): void {
 		$request = $this->createMock(IRequest::class);
 		$userSession = $this->createMock(IUserSession::class);
@@ -828,6 +933,81 @@ final class ApiTest extends TestCase {
 				'files' => [
 					['path' => 'folder/a.txt', 'status' => 'Unchanged'],
 					['path' => 'folder/new.txt', 'status' => 'Uncommitted'],
+				],
+			],
+		], $response->getData()['directories']);
+	}
+
+	public function testGetDirectoriesDoesNotSurfaceUncommittedFilesOnAnotherStorage(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$homeStorage = $this->createMock(IStorage::class);
+		$homeStorage->method('isLocal')->willReturn(true);
+		$homeStorage->method('getId')->willReturn('home::testuser');
+		$homeStorage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$groupFolderStorage = $this->createMock(IStorage::class);
+		$groupFolderStorage->method('isLocal')->willReturn(true);
+		$groupFolderStorage->method('getId')->willReturn('local::/data/__groupfolders/3/');
+
+		// folder/
+		//   a.txt       (already committed, on the home storage)
+		//   shared.txt  (never committed, on another storage - can never be
+		//                committed, so it must not surface as 'Uncommitted')
+		$fileA = $this->createMock(Node::class);
+		$fileA->method('getStorage')->willReturn($homeStorage);
+		$fileA->method('getPath')->willReturn('/testuser/files/folder/a.txt');
+
+		$mountedFile = $this->createMock(Node::class);
+		$mountedFile->method('getStorage')->willReturn($groupFolderStorage);
+		$mountedFile->method('getPath')->willReturn('/testuser/files/folder/shared.txt');
+
+		$folder = $this->createMock(Folder::class);
+		$folder->method('getStorage')->willReturn($homeStorage);
+		$folder->method('getDirectoryListing')->willReturn([$fileA, $mountedFile]);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($homeStorage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->willReturnMap([
+			['folder/a.txt', true],
+		]);
+		$userFolder->method('get')->with('folder')->willReturn($folder);
+		$userFolder->method('getRelativePath')->willReturnMap([
+			['/testuser/files/folder/a.txt', '/folder/a.txt'],
+			['/testuser/files/folder/shared.txt', '/folder/shared.txt'],
+		]);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => 'folder', 'files' => ['folder/a.txt']],
+			]);
+		$vcsService->method('getFileStatuses')
+			->with('/data/testuser/files', ['folder/a.txt'])
+			->willReturn(['folder/a.txt' => 'Unchanged']);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->getDirectories();
+
+		$this->assertEquals('success', $response->getData()['status']);
+		$this->assertEquals([
+			[
+				'path' => 'folder',
+				'files' => [
+					['path' => 'folder/a.txt', 'status' => 'Unchanged'],
 				],
 			],
 		], $response->getData()['directories']);

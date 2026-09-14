@@ -6,6 +6,7 @@ namespace OCA\GitCloud\Listener;
 
 use OCA\GitCloud\Db\SnapshotMapper;
 use OCA\GitCloud\Service\VcsService;
+use OCA\GitCloud\Service\WorkingTree;
 use OCP\EventDispatcher\Event;
 use OCP\EventDispatcher\IEventListener;
 use OCP\Files\Events\Node\NodeRenamedEvent;
@@ -74,6 +75,22 @@ class GitTrackedNodeRenamedListener implements IEventListener {
 
 		if ($newRelativePath === '' || $oldRelativePath === $newRelativePath) {
 			// Nothing actually changed from GitCloud's perspective (defensive).
+			return;
+		}
+
+		if (!WorkingTree::contains($target, $userFolder)) {
+			// The file was moved onto a different storage - a group folder, a
+			// received share, an external mount - which is outside the Git
+			// working tree, so there is no new path for git to stage (and
+			// staging the old one alone would fail the whole rename). From
+			// GitCloud's perspective the file has left its world, which is
+			// exactly what a deletion already means: the file drops off as
+			// Deleted while its History/Rollback stay reachable.
+			$result = $this->vcsService->autoCommitDelete($repositoryPath, $oldRelativePath, $fileId, $userId);
+			if (!$result['success']) {
+				$this->logger->warning(sprintf('Failed to auto-commit deletion of %s after it was moved outside the working tree: %s', $oldRelativePath, $result['message']));
+			}
+
 			return;
 		}
 

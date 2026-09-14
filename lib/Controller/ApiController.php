@@ -7,9 +7,11 @@ namespace OCA\GitCloud\Controller;
 use OCA\GitCloud\AppInfo\Application;
 use OCA\GitCloud\Db\Snapshot;
 use OCA\GitCloud\Exception\FileTooLargeException;
+use OCA\GitCloud\Exception\NotInWorkingTreeException;
 use OCA\GitCloud\Exception\NotLocalStorageException;
 use OCA\GitCloud\Service\GitStaticBinaryService;
 use OCA\GitCloud\Service\VcsService;
+use OCA\GitCloud\Service\WorkingTree;
 use OCA\GitCloud\Settings\Admin;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\ApiRoute;
@@ -112,6 +114,17 @@ class ApiController extends OCSController {
 					[
 						'status' => 'error',
 						'message' => sprintf('File is not on local storage: %s', $e->getMessage()),
+					],
+					Http::STATUS_BAD_REQUEST,
+				);
+			} catch (NotInWorkingTreeException $e) {
+				return new DataResponse(
+					[
+						'status' => 'error',
+						'message' => sprintf(
+							'GitCloud can only track files in your personal files - group folders, shared folders and external storages are not supported: %s',
+							$e->getMessage(),
+						),
 					],
 					Http::STATUS_BAD_REQUEST,
 				);
@@ -645,6 +658,22 @@ class ApiController extends OCSController {
 			);
 		}
 
+		// Same reasoning as the commit path's guard (see collectRelativeFilePaths):
+		// a node on any storage other than the user's own home isn't in the Git
+		// working tree, so there is nothing for git to check out at that path.
+		if ($node !== null && !WorkingTree::contains($node, $userFolder)) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf(
+						'GitCloud can only track files in your personal files - group folders, shared folders and external storages are not supported: %s',
+						$filePath,
+					),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
 		$relativePath = $node !== null
 			? ltrim($userFolder->getRelativePath($node->getPath()), '/')
 			: ltrim($filePath, '/');
@@ -781,6 +810,8 @@ class ApiController extends OCSController {
 	 * @param string[] $warnings
 	 * @return list<array{path: string, fileId: int}>
 	 * @throws FileTooLargeException
+	 * @throws NotLocalStorageException
+	 * @throws NotInWorkingTreeException
 	 */
 	private function collectRelativeFilePaths(
 		Node $node,
@@ -791,6 +822,15 @@ class ApiController extends OCSController {
 	): array {
 		if (!$node->getStorage()->isLocal()) {
 			throw new NotLocalStorageException(ltrim($userFolder->getRelativePath($node->getPath()), '/'));
+		}
+
+		// isLocal() only means "the bytes are on this filesystem", not "in this
+		// user's home" - a group folder, a received share or a local external
+		// mount passes it while living outside the Git working tree entirely.
+		// Checked after isLocal() so a remote external storage keeps its own,
+		// more specific message.
+		if (!WorkingTree::contains($node, $userFolder)) {
+			throw new NotInWorkingTreeException(ltrim($userFolder->getRelativePath($node->getPath()), '/'));
 		}
 
 		if (!($node instanceof Folder)) {
@@ -903,6 +943,12 @@ class ApiController extends OCSController {
 		$uncommittedFiles = [];
 		foreach ($folderNode->getDirectoryListing() as $child) {
 			if ($child instanceof Folder) {
+				continue;
+			}
+
+			// A file on another storage (group folder, received share, external
+			// mount) can never be committed, so don't surface it as Uncommitted.
+			if (!WorkingTree::contains($child, $userFolder)) {
 				continue;
 			}
 
