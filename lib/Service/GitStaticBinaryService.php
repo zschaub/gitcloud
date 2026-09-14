@@ -139,12 +139,21 @@ class GitStaticBinaryService {
 				return ['success' => false, 'message' => sprintf('Failed to create %s.', $binDir)];
 			}
 
-			copy($extractedDir . '/git', $binDir . '/git');
-			chmod($binDir . '/git', 0755);
+			$binaryPath = $binDir . '/git';
+			// @-suppressed and checked via return value, not the emitted warning -
+			// the same convention runProcess() below already uses for @proc_open.
+			if (!@copy($extractedDir . '/git', $binaryPath)) {
+				return ['success' => false, 'message' => sprintf('Failed to write the static git binary to %s. Check that the web server user can write to this app\'s directory.', $binaryPath)];
+			}
+			if (!@chmod($binaryPath, 0755)) {
+				return ['success' => false, 'message' => sprintf('Failed to make %s executable.', $binaryPath)];
+			}
 			// Records exactly which pinned tag this install came from, so a later
 			// getStatus() call can tell "up to date" apart from "installed before
 			// GitCloud itself was upgraded to a version pinning something newer".
-			file_put_contents($binDir . '/' . self::VERSION_MARKER_FILENAME, $pin['tag']);
+			if (@file_put_contents($binDir . '/' . self::VERSION_MARKER_FILENAME, $pin['tag']) === false) {
+				return ['success' => false, 'message' => sprintf('Installed the static git binary, but failed to write its version marker to %s.', $binDir)];
+			}
 			// Carried along for GPL-2.0 compliance and build provenance, not read by
 			// VcsService at runtime - only bin/<arch>/git itself is ever executed.
 			// Best-effort: a missing license file shouldn't fail an otherwise-successful install.

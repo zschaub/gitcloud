@@ -197,7 +197,7 @@ onMounted(loadGitStatus)
 		</p>
 
 		<NcButton
-			v-if="gitStatus && !gitStatus.staticGitAvailable && gitStatus.architecture"
+			v-if="gitStatus && gitStatus.architecture && (!gitStatus.staticGitAvailable || gitStatus.installedVersion === null)"
 			:disabled="downloadStatus === 'loading'"
 			@click="downloadStaticGit">
 			{{ downloadStatus === "loading" ? "Downloading…" : "Download static git" }}
@@ -214,9 +214,14 @@ onMounted(loadGitStatus)
 		<NcNoteCard v-if="downloadStatus === 'error'" type="error" :text="downloadMessage" />
 
 		<NcNoteCard
-			v-if="hasCheckedForUpdate && gitStatus && !gitStatus.updateAvailable"
+			v-if="hasCheckedForUpdate && gitStatus && !gitStatus.updateAvailable && gitStatus.installedVersion !== null"
 			type="success"
 			text="Static git is already up to date." />
+
+		<NcNoteCard
+			v-if="hasCheckedForUpdate && gitStatus && !gitStatus.updateAvailable && gitStatus.installedVersion === null"
+			type="warning"
+			text="The installed static git's version is unknown (it was installed before version tracking existed), so update checks can't tell whether it's current. Download static git again to enable update checks." />
 
 		<template v-if="gitStatus && gitStatus.updateAvailable">
 			<NcNoteCard type="warning" :text="updateAvailableMessage" />

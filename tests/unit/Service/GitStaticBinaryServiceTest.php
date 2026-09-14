@@ -244,6 +244,46 @@ final class GitStaticBinaryServiceTest extends TestCase {
 		$this->assertStringContainsString('install directory', $result['message']);
 	}
 
+	public function testDownloadForCurrentArchitectureFailsWithClearMessageWhenBinDirectoryIsNotWritable(): void {
+		if (function_exists('posix_getuid') && posix_getuid() === 0) {
+			$this->markTestSkipped('Running as root ignores filesystem permission bits, so this test cannot simulate a write failure.');
+		}
+
+		$arch = $this->currentArch();
+
+		$this->tmpWorkDir = sys_get_temp_dir() . '/gitcloud-test-workdir-' . uniqid();
+		mkdir($this->tmpWorkDir, 0755, true);
+		[$archivePath, $sha256] = $this->buildFixtureArchive($this->tmpWorkDir, 'git-test-' . $arch);
+
+		$appPath = $this->createFakeAppPath('git-test-' . $arch, $sha256);
+		$this->installFakeCurlCopying($archivePath);
+
+		// Pre-create bin/<arch> read-only, simulating the README's "read-only app
+		// directory" scenario described in this bug report - copy() into it must
+		// fail, and that failure must not be silently reported as a success.
+		$binDir = $appPath . '/bin/' . $arch;
+		mkdir($binDir, 0755, true);
+		chmod($binDir, 0500);
+
+		$appManager = $this->createMock(IAppManager::class);
+		$appManager->method('getAppPath')->with('gitcloud')->willReturn($appPath);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$service = new GitStaticBinaryService($logger, $appManager);
+
+		try {
+			$result = $service->downloadForCurrentArchitecture();
+
+			$this->assertFalse($result['success']);
+			$this->assertStringContainsString('Failed to write the static git binary', $result['message']);
+			$this->assertFileDoesNotExist($binDir . '/git');
+			$this->assertFileDoesNotExist($binDir . '/git.version');
+		} finally {
+			// Restore write permission so tearDown()'s rm -rf can actually clean up.
+			chmod($binDir, 0755);
+		}
+	}
+
 	public function testGetStatusReportsStaticGitAbsentAndPinnedVersionBeforeDownload(): void {
 		$arch = $this->currentArch();
 		$appPath = $this->createFakeAppPath('git-test-' . $arch, str_repeat('0', 64));
