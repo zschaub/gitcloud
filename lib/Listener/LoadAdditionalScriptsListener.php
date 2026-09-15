@@ -17,5 +17,6 @@ class LoadAdditionalScriptsListener implements IEventListener {
 			return;
 		}
 		Util::addScript(Application::APP_ID, 'gitcloud-files-actions');
+		Util::addStyle(Application::APP_ID, 'gitcloud-files-actions');
 	}
 }

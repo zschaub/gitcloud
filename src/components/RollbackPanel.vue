@@ -289,12 +289,12 @@ const confirmButtons = computed(() => [
 
 .rollback-panel__banner--success {
     background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .rollback-panel__banner--error {
     background-color: color-mix(in srgb, var(--color-error) 15%, transparent);
-    color: var(--color-error);
+    color: var(--color-error-text);
 }
 
 .rollback-panel__body {
@@ -368,12 +368,12 @@ const confirmButtons = computed(() => [
 
 .rollback-panel__pill--success {
     background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .rollback-panel__pill--warning {
     background-color: var(--color-warning);
-    color: var(--color-main-background);
+    color: var(--color-warning-text);
 }
 
 .rollback-panel__timestamp {

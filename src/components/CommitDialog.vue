@@ -11,6 +11,9 @@ import { fileName } from '../utils/path'
 const props = defineProps<{
     open: boolean;
     files: string[];
+    // Which of `files` are folders (rather than plain files), so the dialog's
+    // title and chips can say so instead of implying every target is a file.
+    folders: string[];
 }>()
 
 const emit = defineEmits<{
@@ -41,9 +44,13 @@ watch(
 	},
 )
 
-const title = computed(() =>
-	props.files.length > 1 ? `Commit ${props.files.length} files` : 'Commit file',
-)
+const title = computed(() => {
+	const hasFolder = props.files.some((file) => props.folders.includes(file))
+	if (props.files.length > 1) {
+		return hasFolder ? `Commit ${props.files.length} items` : `Commit ${props.files.length} files`
+	}
+	return hasFolder ? 'Commit folder' : 'Commit file'
+})
 
 const commitDisabled = computed(
 	() => message.value.trim() === '' || status.value === 'loading' || status.value === 'success',
@@ -155,7 +162,7 @@ const confirmButtons = computed(() => [
 		<div class="commit-dialog">
 			<div class="commit-dialog__chips">
 				<span v-for="file in files" :key="file" class="commit-dialog__chip">
-					{{ fileName(file) }}
+					{{ fileName(file) }}{{ folders.includes(file) ? '/' : '' }}
 				</span>
 			</div>
 
@@ -235,11 +242,11 @@ const confirmButtons = computed(() => [
 }
 
 .commit-dialog__result--success {
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .commit-dialog__result--error {
-    color: var(--color-error);
+    color: var(--color-error-text);
 }
 
 .commit-dialog__warnings {

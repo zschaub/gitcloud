@@ -1280,6 +1280,52 @@ final class ApiTest extends TestCase {
 		$this->assertEquals('Modified', $response->getData()['gitStatus']);
 	}
 
+	public function testGetStatusRoundsSmallDirectorySizeToTwoDecimalPlacesInsteadOfZero(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('nodeExists')->with('folder/small.txt')->willReturn(true);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
+		$vcsService->method('getCommittedDirectories')
+			->with('testuser')
+			->willReturn([
+				['path' => 'folder', 'files' => ['folder/small.txt']],
+			]);
+		$vcsService->expects($this->once())
+			->method('getDirectoryStatus')
+			->with('/data/testuser/files', ['folder/small.txt'])
+			->willReturn([
+				'success' => true,
+				// ~48.8 KB - rounds to 0.0 MB at one decimal place, but should
+				// still show as a nonzero size at two.
+				'totalSizeBytes' => 50000,
+				'gitStatus' => 'Clean',
+			]);
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->getStatus('folder');
+
+		$this->assertEquals(0.05, $response->getData()['totalSizeMb']);
+	}
+
 	public function testGetStatusFailsWhenNoUserIsLoggedIn(): void {
 		$request = $this->createMock(IRequest::class);
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NcContent from '@nextcloud/vue/components/NcContent'
 import NcAppContent from '@nextcloud/vue/components/NcAppContent'
 import NcTextField from '@nextcloud/vue/components/NcTextField'
 import NcButton from '@nextcloud/vue/components/NcButton'
@@ -185,7 +186,20 @@ const selectedDirectoryFiles = computed(() => {
 	return directories.value.find((dir) => dir.path === selectedDirectory.value)?.files ?? []
 })
 
-const selectedDirectoryFileCount = computed(() => selectedDirectoryFiles.value.length)
+// Matches the backend's "Files Tracked" definition (existing, committed files
+// only - see ApiController::filterExistingFiles()), rather than the raw file
+// list, which also carries Uncommitted/Deleted entries for display purposes -
+// otherwise this count and the global stat disagree whenever a directory has
+// either.
+function trackedFileCount(dir: CommittedDirectory): number {
+	return dir.files.filter((file) => file.status !== 'Uncommitted' && file.status !== 'Deleted').length
+}
+
+const selectedDirectoryFileCount = computed(() => {
+	if (!selectedDirectory.value) return 0
+	const dir = directories.value.find((d) => d.path === selectedDirectory.value)
+	return dir ? trackedFileCount(dir) : 0
+})
 
 function modifiedFileCount(dir: CommittedDirectory): number {
 	return dir.files.filter((file) => file.status === 'Modified').length
@@ -200,6 +214,7 @@ const selectedFiles = ref<Set<string>>(new Set())
 function selectDirectory(dir: string) {
 	selectedDirectory.value = dir
 	selectedFiles.value = new Set()
+	untrackMessageType.value = null
 	loadDirectoryStatus(dir)
 }
 
@@ -329,231 +344,234 @@ const untrackConfirmButtons = computed(() => [
 </script>
 
 <template>
-	<NcAppContent app-name="gitcloud">
-		<div class="dashboard-container">
-			<p v-if="statusError" class="banner banner--error">
-				{{ statusError }}
-			</p>
-
-			<!-- State A: Overview -->
-			<template v-if="!selectedDirectory">
-				<h1>Git Dashboard</h1>
-
-				<section class="stats-grid">
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Files Tracked
-						</div>
-						<div class="stat-card__value">
-							{{ fileCount }}
-						</div>
-					</div>
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Directories
-						</div>
-						<div class="stat-card__value">
-							{{ dirCount }}
-						</div>
-					</div>
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Total Size
-						</div>
-						<div class="stat-card__value">
-							{{ totalSizeMb }} MB
-						</div>
-					</div>
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Status
-						</div>
-						<div class="stat-card__status">
-							<span class="status-dot" :class="`status-dot--${gitStatusVariant}`" />
-							<span class="stat-card__value stat-card__value--status">{{ gitStatus }}</span>
-						</div>
-					</div>
-				</section>
-
-				<p v-if="directoriesError" class="banner banner--error">
-					{{ directoriesError }}
-				</p>
-
-				<template v-if="directories.length === 0">
-					<div class="empty-panel">
-						<span class="empty-panel__icon" v-html="FolderOutlineIcon" />
-						<div class="empty-panel__title">
-							No directories tracked yet
-						</div>
-						<div class="empty-panel__copy">
-							Right-click a file in the Files app and choose "Add to GitCloud" to make your first
-							commit — it'll show up here.
-						</div>
-					</div>
-				</template>
-				<div v-else class="directories-panel">
-					<div class="directories-panel__header">
-						<h2>Committed Directories</h2>
-						<NcTextField
-							class="directories-panel__search"
-							:model-value="searchTerm"
-							label="Search directories"
-							placeholder="Search directories…"
-							@update:model-value="searchTerm = String($event)" />
-					</div>
-					<ul v-if="displayedDirectoryRows.length" class="directory-list">
-						<li
-							v-for="row in displayedDirectoryRows"
-							:key="row.path"
-							class="directory-row"
-							:class="{ 'directory-row--synthetic': !row.isReal }"
-							:style="{ paddingLeft: `${20 + row.depth * 22}px` }"
-							@click="row.isReal && selectDirectory(row.path)">
-							<span class="directory-row__icon" v-html="FolderOutlineIcon" />
-							<span class="directory-row__label">{{ row.label }}</span>
-							<template v-if="row.isReal">
-								<span class="directory-row__pill">{{ row.files.length }} files</span>
-								<span v-if="modifiedFileCount(row) > 0" class="directory-row__pill directory-row__pill--modified">
-									{{ modifiedFileCount(row) }} modified
-								</span>
-								<span v-if="uncommittedFileCount(row) > 0" class="directory-row__pill directory-row__pill--uncommitted">
-									{{ uncommittedFileCount(row) }} uncommitted
-								</span>
-								<span class="directory-row__chevron" v-html="ChevronRightIcon" />
-							</template>
-						</li>
-					</ul>
-					<p v-else class="no-match">
-						No directories match "{{ searchTerm }}".
-					</p>
-				</div>
-			</template>
-
-			<!-- State B: Directory Detail -->
-			<template v-else>
-				<div class="directory-detail__header">
-					<NcButton variant="tertiary" class="back-button" @click="deselectDirectory">
-						← Back to Overview
-					</NcButton>
-					<NcButton variant="tertiary" @click="requestUntrackDirectory">
-						<template #icon>
-							<span class="file-row__history-icon" v-html="LinkOffIcon" />
-						</template>
-						Stop tracking this folder
-					</NcButton>
-				</div>
-				<h2>{{ directoryLabel(selectedDirectory) }}</h2>
-
-				<p v-if="directoryStatusError" class="banner banner--error">
-					{{ directoryStatusError }}
+	<NcContent app-name="gitcloud">
+		<NcAppContent app-name="gitcloud">
+			<div class="dashboard-container">
+				<p v-if="statusError" class="banner banner--error">
+					{{ statusError }}
 				</p>
 				<p v-if="untrackMessageType" class="banner" :class="`banner--${untrackMessageType}`">
 					{{ untrackMessage }}
 				</p>
 
-				<section class="stats-grid stats-grid--detail">
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Files in Directory
-						</div>
-						<div class="stat-card__value">
-							{{ selectedDirectoryFileCount }}
-						</div>
-					</div>
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Total Size
-						</div>
-						<div class="stat-card__value">
-							{{ directoryTotalSizeMb }} MB
-						</div>
-					</div>
-					<div class="stat-card">
-						<div class="stat-card__label">
-							Status
-						</div>
-						<div class="stat-card__status">
-							<span class="status-dot" :class="`status-dot--${directoryGitStatusVariant}`" />
-							<span class="stat-card__value stat-card__value--status">{{ directoryGitStatus }}</span>
-						</div>
-					</div>
-				</section>
+				<!-- State A: Overview -->
+				<template v-if="!selectedDirectory">
+					<h1>Git Dashboard</h1>
 
-				<div class="files-panel">
-					<h2>Files</h2>
-					<ul class="file-list">
-						<li v-for="file in selectedDirectoryFiles" :key="file.path" class="file-row">
-							<input
-								type="checkbox"
-								class="file-row__checkbox"
-								:checked="selectedFiles.has(file.path)"
-								:disabled="isDeleted(file)"
-								:title="isDeleted(file) ? 'Deleted — use History to restore' : undefined"
-								@change="toggleFileSelection(file.path)">
-							<span class="file-row__icon" v-html="FileDocumentOutlineIcon" />
-							<span class="file-row__name">{{ file.path }}</span>
-							<span class="file-row__status">
-								<span class="status-dot" :class="`status-dot--${statusVariant(file.status)}`" />
-								{{ file.status }}
-							</span>
-							<NcButton variant="tertiary" @click="openRollbackForFile(file.path)">
-								<template #icon>
-									<span class="file-row__history-icon" v-html="ClockOutlineIcon" />
+					<section class="stats-grid">
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Files Tracked
+							</div>
+							<div class="stat-card__value">
+								{{ fileCount }}
+							</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Directories
+							</div>
+							<div class="stat-card__value">
+								{{ dirCount }}
+							</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Total Size
+							</div>
+							<div class="stat-card__value">
+								{{ totalSizeMb }} MB
+							</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Status
+							</div>
+							<div class="stat-card__status">
+								<span class="status-dot" :class="`status-dot--${gitStatusVariant}`" />
+								<span class="stat-card__value stat-card__value--status">{{ gitStatus }}</span>
+							</div>
+						</div>
+					</section>
+
+					<p v-if="directoriesError" class="banner banner--error">
+						{{ directoriesError }}
+					</p>
+
+					<template v-if="directories.length === 0">
+						<div class="empty-panel">
+							<span class="empty-panel__icon" v-html="FolderOutlineIcon" />
+							<div class="empty-panel__title">
+								No directories tracked yet
+							</div>
+							<div class="empty-panel__copy">
+								Right-click a file in the Files app and choose "Add to GitCloud" to make your first
+								commit — it'll show up here.
+							</div>
+						</div>
+					</template>
+					<div v-else class="directories-panel">
+						<div class="directories-panel__header">
+							<h2>Committed Directories</h2>
+							<NcTextField
+								class="directories-panel__search"
+								:model-value="searchTerm"
+								label="Search directories"
+								placeholder="Search directories…"
+								@update:model-value="searchTerm = String($event)" />
+						</div>
+						<ul v-if="displayedDirectoryRows.length" class="directory-list">
+							<li
+								v-for="row in displayedDirectoryRows"
+								:key="row.path"
+								class="directory-row"
+								:class="{ 'directory-row--synthetic': !row.isReal }"
+								:style="{ paddingLeft: `${20 + row.depth * 22}px` }"
+								@click="row.isReal && selectDirectory(row.path)">
+								<span class="directory-row__icon" v-html="FolderOutlineIcon" />
+								<span class="directory-row__label">{{ row.label }}</span>
+								<template v-if="row.isReal">
+									<span class="directory-row__pill">{{ trackedFileCount(row) }} {{ trackedFileCount(row) === 1 ? 'file' : 'files' }}</span>
+									<span v-if="modifiedFileCount(row) > 0" class="directory-row__pill directory-row__pill--modified">
+										{{ modifiedFileCount(row) }} modified
+									</span>
+									<span v-if="uncommittedFileCount(row) > 0" class="directory-row__pill directory-row__pill--uncommitted">
+										{{ uncommittedFileCount(row) }} uncommitted
+									</span>
+									<span class="directory-row__chevron" v-html="ChevronRightIcon" />
 								</template>
-								History
-							</NcButton>
-							<NcButton variant="tertiary" @click="requestUntrackFile(file.path)">
-								<template #icon>
-									<span class="file-row__history-icon" v-html="LinkOffIcon" />
-								</template>
-								Stop tracking
-							</NcButton>
-						</li>
-					</ul>
-				</div>
-			</template>
-		</div>
-
-		<div v-if="selectedFileCount > 0" class="selection-bar">
-			<span class="selection-bar__count">{{ selectedFileCount }} file(s) selected</span>
-			<NcButton variant="tertiary" @click="clearFileSelection">
-				Clear
-			</NcButton>
-			<NcButton variant="primary" class="selection-bar__commit" @click="openCommitForSelection">
-				Commit Changes…
-			</NcButton>
-		</div>
-
-		<CommitDialog
-			:open="commitDialogOpen"
-			:files="commitDialogFiles"
-			@update:open="commitDialogOpen = $event"
-			@committed="onCommitted" />
-
-		<RollbackPanel
-			:open="rollbackPanelOpen"
-			:file-path="rollbackPanelFilePath"
-			@update:open="rollbackPanelOpen = $event"
-			@rolled-back="onRolledBack" />
-
-		<NcDialog
-			:open="untrackConfirmTarget !== null"
-			name="Stop tracking?"
-			size="small"
-			:buttons="untrackConfirmButtons"
-			@update:open="(value) => !value && cancelUntrackConfirm()">
-			<p class="untrack-confirm__message">
-				<template v-if="untrackConfirmTarget?.type === 'file'">
-					GitCloud will stop tracking <strong>{{ untrackConfirmTarget.path }}</strong> and remove its
-					snapshot history from the dashboard. The file itself is not deleted or modified.
+							</li>
+						</ul>
+						<p v-else class="no-match">
+							No directories match "{{ searchTerm }}".
+						</p>
+					</div>
 				</template>
-				<template v-else-if="untrackConfirmTarget">
-					GitCloud will stop tracking every file under <strong>{{ directoryLabel(untrackConfirmTarget.path) }}</strong>
-					and remove their snapshot history from the dashboard. No files are deleted or modified.
+
+				<!-- State B: Directory Detail -->
+				<template v-else>
+					<div class="directory-detail__header">
+						<NcButton variant="tertiary" class="back-button" @click="deselectDirectory">
+							← Back to Overview
+						</NcButton>
+						<NcButton variant="tertiary" @click="requestUntrackDirectory">
+							<template #icon>
+								<span class="file-row__history-icon" v-html="LinkOffIcon" />
+							</template>
+							Stop tracking this folder
+						</NcButton>
+					</div>
+					<h2>{{ directoryLabel(selectedDirectory) }}</h2>
+
+					<p v-if="directoryStatusError" class="banner banner--error">
+						{{ directoryStatusError }}
+					</p>
+
+					<section class="stats-grid stats-grid--detail">
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Files in Directory
+							</div>
+							<div class="stat-card__value">
+								{{ selectedDirectoryFileCount }}
+							</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Total Size
+							</div>
+							<div class="stat-card__value">
+								{{ directoryTotalSizeMb }} MB
+							</div>
+						</div>
+						<div class="stat-card">
+							<div class="stat-card__label">
+								Status
+							</div>
+							<div class="stat-card__status">
+								<span class="status-dot" :class="`status-dot--${directoryGitStatusVariant}`" />
+								<span class="stat-card__value stat-card__value--status">{{ directoryGitStatus }}</span>
+							</div>
+						</div>
+					</section>
+
+					<div class="files-panel">
+						<h2>Files</h2>
+						<ul class="file-list">
+							<li v-for="file in selectedDirectoryFiles" :key="file.path" class="file-row">
+								<input
+									type="checkbox"
+									class="file-row__checkbox"
+									:checked="selectedFiles.has(file.path)"
+									:disabled="isDeleted(file)"
+									:title="isDeleted(file) ? 'Deleted — use History to restore' : undefined"
+									@change="toggleFileSelection(file.path)">
+								<span class="file-row__icon" v-html="FileDocumentOutlineIcon" />
+								<span class="file-row__name">{{ file.path }}</span>
+								<span class="file-row__status">
+									<span class="status-dot" :class="`status-dot--${statusVariant(file.status)}`" />
+									{{ file.status }}
+								</span>
+								<NcButton variant="tertiary" @click="openRollbackForFile(file.path)">
+									<template #icon>
+										<span class="file-row__history-icon" v-html="ClockOutlineIcon" />
+									</template>
+									History
+								</NcButton>
+								<NcButton variant="tertiary" @click="requestUntrackFile(file.path)">
+									<template #icon>
+										<span class="file-row__history-icon" v-html="LinkOffIcon" />
+									</template>
+									Stop tracking
+								</NcButton>
+							</li>
+						</ul>
+					</div>
 				</template>
-			</p>
-		</NcDialog>
-	</NcAppContent>
+			</div>
+
+			<div v-if="selectedFileCount > 0" class="selection-bar">
+				<span class="selection-bar__count">{{ selectedFileCount }} file(s) selected</span>
+				<NcButton variant="tertiary" @click="clearFileSelection">
+					Clear
+				</NcButton>
+				<NcButton variant="primary" class="selection-bar__commit" @click="openCommitForSelection">
+					Commit Changes…
+				</NcButton>
+			</div>
+
+			<CommitDialog
+				:open="commitDialogOpen"
+				:files="commitDialogFiles"
+				:folders="[]"
+				@update:open="commitDialogOpen = $event"
+				@committed="onCommitted" />
+
+			<RollbackPanel
+				:open="rollbackPanelOpen"
+				:file-path="rollbackPanelFilePath"
+				@update:open="rollbackPanelOpen = $event"
+				@rolled-back="onRolledBack" />
+
+			<NcDialog
+				:open="untrackConfirmTarget !== null"
+				name="Stop tracking?"
+				size="small"
+				:buttons="untrackConfirmButtons"
+				@update:open="(value) => !value && cancelUntrackConfirm()">
+				<p class="untrack-confirm__message">
+					<template v-if="untrackConfirmTarget?.type === 'file'">
+						GitCloud will stop tracking <strong>{{ untrackConfirmTarget.path }}</strong> and remove its
+						snapshot history from the dashboard. The file itself is not deleted or modified.
+					</template>
+					<template v-else-if="untrackConfirmTarget">
+						GitCloud will stop tracking every file under <strong>{{ directoryLabel(untrackConfirmTarget.path) }}</strong>
+						and remove their snapshot history from the dashboard. No files are deleted or modified.
+					</template>
+				</p>
+			</NcDialog>
+		</NcAppContent>
+	</NcContent>
 </template>
 
 <style scoped>
@@ -791,7 +809,7 @@ h2 {
 }
 
 .directory-row__pill--modified {
-    color: var(--color-warning);
+    color: var(--color-warning-text);
     background-color: color-mix(in srgb, var(--color-warning) 15%, transparent);
 }
 

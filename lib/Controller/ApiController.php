@@ -425,7 +425,7 @@ class ApiController extends OCSController {
 				'status' => 'success',
 				'fileCount' => count($existingFiles),
 				'dirCount' => $dirCount,
-				'totalSizeMb' => round($result['totalSizeBytes'] / 1024 / 1024, 1),
+				'totalSizeMb' => round($result['totalSizeBytes'] / 1024 / 1024, 2),
 				'gitStatus' => $result['gitStatus'],
 			],
 			Http::STATUS_OK,
