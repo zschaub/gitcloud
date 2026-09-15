@@ -50,12 +50,49 @@ class VcsService {
 	 * The kinds of change autoCommitChange() records, named the way the log lines
 	 * that embed them read ("... while auto-committing a rename: ...").
 	 */
+	/**
+	 * Git pathspec magic forcing an exact, non-glob path match. See literalPathspec().
+	 */
+	private const PATHSPEC_LITERAL_PREFIX = ':(literal)';
+
 	public const AUTO_COMMIT_DELETE = 'a delete';
 	public const AUTO_COMMIT_RENAME = 'a rename';
 	public const AUTO_COMMIT_RESTORE = 'a restore';
 
 	public const GIT_NOT_INSTALLED_MESSAGE = 'git is not installed on this server (the "git" binary could not be found on the PATH). Please install git and ensure it is available to the web server user.';
 	public const GIT_STATIC_SELECTED_BUT_MISSING_MESSAGE = 'Static git was selected in Settings > Administration > GitCloud, but no bundled binary has been downloaded for this server yet. Download it from that settings page, or switch back to "Automatic" or "System git".';
+	public const REPOSITORY_BUSY_MESSAGE = 'Another GitCloud operation is still running on your files. Please try again in a moment.';
+
+	/**
+	 * Suffix appended to the Git directory's own path to name the lock file guarding it
+	 * (see withRepositoryLock()), making it a sibling of that directory rather than a
+	 * file inside it.
+	 */
+	private const LOCK_FILE_SUFFIX = '.lock';
+
+	/**
+	 * How long a request waits for the repository lock before giving up with
+	 * REPOSITORY_BUSY_MESSAGE, and how often it re-checks while waiting. Long enough to
+	 * absorb a burst of sync-client uploads, short enough not to hold a PHP worker.
+	 */
+	private const LOCK_TIMEOUT_SECONDS = 10.0;
+	private const LOCK_RETRY_INTERVAL_MICROSECONDS = 50000;
+
+	/**
+	 * Caps on how much of git's own output summariseGitOutput() forwards to the user.
+	 */
+	private const MAX_ERROR_OUTPUT_LINES = 3;
+	private const MAX_ERROR_OUTPUT_LENGTH = 400;
+
+	/**
+	 * Longest commit message that fits `gitcloud_snapshots`.`message`, which
+	 * Version000102Date20260704120000 declares as a 4000-character string column.
+	 * Enforced at the API boundary (ApiController::commitChanges) so a user-supplied
+	 * message is rejected before any git work happens, and applied as a last-resort
+	 * truncation in createSnapshotRecord() so no generated message can ever make the
+	 * insert throw after git has already committed.
+	 */
+	public const MAX_COMMIT_MESSAGE_LENGTH = 4000;
 
 	/**
 	 * $appManager and $appConfig are nullable/optional (rather than required) so every
@@ -245,46 +282,140 @@ class VcsService {
 			return ['success' => false, 'message' => 'Repository path does not exist.'];
 		}
 
-		$initResult = $this->ensureRepository($repositoryPath);
-		if (!$initResult['success']) {
-			return $initResult;
+		return $this->withRepositoryLock($repositoryPath, function () use ($repositoryPath, $relativeFiles, $message, $userId): array {
+			$initResult = $this->ensureRepository($repositoryPath);
+			if (!$initResult['success']) {
+				return $initResult;
+			}
+
+			$relativeFilePaths = array_column($relativeFiles, 'path');
+
+			$addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $this->literalPathspecs($relativeFilePaths)));
+			if (!$addResult['success']) {
+				$this->logger->warning(sprintf('git add failed: %s', $addResult['output']));
+				return ['success' => false, 'message' => sprintf('Failed to stage files: %s', $this->summariseGitOutput($addResult['output']))];
+			}
+
+			$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+			if ($stagedDiffResult['success']) {
+				return $this->recordSnapshotsForAlreadyCommittedFiles($repositoryPath, $relativeFiles, $message, $userId);
+			}
+
+			$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+			if (!$commitResult['success']) {
+				$this->logger->info(sprintf('git commit did not succeed: %s', $commitResult['output']));
+				return ['success' => false, 'message' => sprintf('Failed to commit changes: %s', $this->summariseGitOutput($commitResult['output']))];
+			}
+
+			$commitHash = $this->readHeadCommitHash($repositoryPath, 'after commit');
+
+			foreach ($relativeFiles as $file) {
+				// Chained by fileid, not path, so a file deleted and later recreated at
+				// the same path (a different fileid) correctly starts a fresh history
+				// chain instead of being misattributed as a continuation of the old one.
+				$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $file['fileId']);
+				$parentSnapshotId = $parentSnapshot?->getId();
+				$this->createSnapshotRecord($userId, $file['path'], $commitHash, $message, $parentSnapshotId, 'committed', $file['fileId']);
+			}
+
+			$this->logger->info(sprintf('Committed %d file(s) with message: "%s"', count($relativeFiles), $message));
+			return [
+				'success' => true,
+				'message' => 'Successfully staged and committed changes.',
+			];
+		});
+	}
+
+	/**
+	 * Handles the "git has nothing staged" outcome of a commit. Historically this was a
+	 * flat error, which stranded any file whose content already sits in git but which has
+	 * no `gitcloud_snapshots` row to prove it: "Stop tracking" deliberately deletes a
+	 * file's rows while leaving git history alone, so re-committing that file could never
+	 * succeed again and it stayed `Uncommitted` on the dashboard forever. The same dead
+	 * end is reachable whenever a commit reaches git but its snapshot row does not (a
+	 * concurrent commit sweeping the staged content up, or a failed row insert).
+	 *
+	 * So: a file that git already tracks but GitCloud has no history for is re-linked to
+	 * the current HEAD instead of being rejected. A file GitCloud *does* still have
+	 * history for genuinely has nothing to commit, and keeps the original message.
+	 *
+	 * @param list<array{path: string, fileId: int}> $relativeFiles
+	 * @return array{success: bool, message: string}
+	 */
+	private function recordSnapshotsForAlreadyCommittedFiles(string $repositoryPath, array $relativeFiles, string $message, string $userId): array {
+		$noChanges = ['success' => false, 'message' => 'No changes to commit for the selected file(s).'];
+
+		$withoutHistory = array_values(array_filter(
+			$relativeFiles,
+			// The path lookup covers legacy rows predating the file_id migration, which
+			// findLatestForFileId() can't see, exactly as untrackFile() already does.
+			fn (array $file): bool => $this->snapshotMapper->findLatestForFileId($userId, $file['fileId']) === null
+				&& $this->getSnapshotsForFile($userId, $file['path']) === [],
+		));
+		if ($withoutHistory === []) {
+			return $noChanges;
 		}
 
-		$relativeFilePaths = array_column($relativeFiles, 'path');
-
-		$addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $relativeFilePaths));
-		if (!$addResult['success']) {
-			$this->logger->warning(sprintf('git add failed: %s', $addResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to stage files: %s', $addResult['output'])];
+		$trackedByGit = $this->listPathsTrackedByGit($repositoryPath, array_column($withoutHistory, 'path'));
+		if ($trackedByGit === []) {
+			return $noChanges;
 		}
 
-		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
-		if ($stagedDiffResult['success']) {
-			return ['success' => false, 'message' => 'No changes to commit for the selected file(s).'];
+		$commitHash = $this->readHeadCommitHash($repositoryPath, 'while re-linking already-committed files');
+		if ($commitHash === '') {
+			return $noChanges;
 		}
 
-		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
-		if (!$commitResult['success']) {
-			$this->logger->info(sprintf('git commit did not succeed: %s', $commitResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to commit changes: %s', $commitResult['output'])];
+		$recorded = 0;
+		foreach ($withoutHistory as $file) {
+			if (!isset($trackedByGit[$file['path']])) {
+				continue;
+			}
+
+			// No parent: by definition these files have no GitCloud history to chain to.
+			$this->createSnapshotRecord($userId, $file['path'], $commitHash, $message, null, 'committed', $file['fileId']);
+			$recorded++;
 		}
 
-		$commitHash = $this->readHeadCommitHash($repositoryPath, 'after commit');
-
-		foreach ($relativeFiles as $file) {
-			// Chained by fileid, not path, so a file deleted and later recreated at
-			// the same path (a different fileid) correctly starts a fresh history
-			// chain instead of being misattributed as a continuation of the old one.
-			$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $file['fileId']);
-			$parentSnapshotId = $parentSnapshot?->getId();
-			$this->createSnapshotRecord($userId, $file['path'], $commitHash, $message, $parentSnapshotId, 'committed', $file['fileId']);
+		if ($recorded === 0) {
+			return $noChanges;
 		}
 
-		$this->logger->info(sprintf('Committed %d file(s) with message: "%s"', count($relativeFiles), $message));
+		$this->logger->info(sprintf('Re-linked %d already-committed file(s) to GitCloud history for user %s', $recorded, $userId));
 		return [
 			'success' => true,
-			'message' => 'Successfully staged and committed changes.',
+			'message' => sprintf(
+				'No file content had changed, so nothing new was committed. GitCloud is tracking %d file(s) again from their most recent commit.',
+				$recorded,
+			),
 		];
+	}
+
+	/**
+	 * Which of $relativeFilePaths git already has in its index, as a lookup keyed by path.
+	 * @param list<string> $relativeFilePaths
+	 * @return array<string, true>
+	 */
+	private function listPathsTrackedByGit(string $repositoryPath, array $relativeFilePaths): array {
+		if ($relativeFilePaths === []) {
+			return [];
+		}
+
+		// -z for the same reason getFileStatuses() uses it: git otherwise quotes any
+		// path containing a space, which would never match a plain relative path.
+		$result = $this->runGit($repositoryPath, array_merge(['ls-files', '-z', '--'], $this->literalPathspecs($relativeFilePaths)));
+		if (!$result['success']) {
+			return [];
+		}
+
+		$tracked = [];
+		foreach (explode("\0", $result['output']) as $path) {
+			if ($path !== '') {
+				$tracked[$path] = true;
+			}
+		}
+
+		return $tracked;
 	}
 
 	/**
@@ -409,36 +540,38 @@ class VcsService {
 			return ['success' => false, 'message' => 'Repository has not been initialized yet.'];
 		}
 
-		[$stageFailure, $nothingStaged, $commitFailure] = match ($changeKind) {
-			self::AUTO_COMMIT_DELETE => ['Failed to stage deletion', 'Nothing to auto-commit for the deleted file.', 'Failed to auto-commit deletion'],
-			self::AUTO_COMMIT_RENAME => ['Failed to stage rename', 'Nothing to auto-commit for the renamed file.', 'Failed to auto-commit rename'],
-			self::AUTO_COMMIT_RESTORE => ['Failed to stage restored file', 'Nothing to auto-commit for the restored file.', 'Failed to auto-commit restore'],
-		};
+		return $this->withRepositoryLock($repositoryPath, function () use ($repositoryPath, $changeKind, $stagePaths, $commitMessage, $snapshotFilePath, $snapshotStatus, $fileId, $userId, $successMessage): array {
+			[$stageFailure, $nothingStaged, $commitFailure] = match ($changeKind) {
+				self::AUTO_COMMIT_DELETE => ['Failed to stage deletion', 'Nothing to auto-commit for the deleted file.', 'Failed to auto-commit deletion'],
+				self::AUTO_COMMIT_RENAME => ['Failed to stage rename', 'Nothing to auto-commit for the renamed file.', 'Failed to auto-commit rename'],
+				self::AUTO_COMMIT_RESTORE => ['Failed to stage restored file', 'Nothing to auto-commit for the restored file.', 'Failed to auto-commit restore'],
+			};
 
-		$addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $stagePaths));
-		if (!$addResult['success']) {
-			$this->logger->warning(sprintf('git add failed while auto-committing %s: %s', $changeKind, $addResult['output']));
-			return ['success' => false, 'message' => sprintf('%s: %s', $stageFailure, $addResult['output'])];
-		}
+			$addResult = $this->runGit($repositoryPath, array_merge(['add', '--'], $this->literalPathspecs($stagePaths)));
+			if (!$addResult['success']) {
+				$this->logger->warning(sprintf('git add failed while auto-committing %s: %s', $changeKind, $addResult['output']));
+				return ['success' => false, 'message' => sprintf('%s: %s', $stageFailure, $this->summariseGitOutput($addResult['output']))];
+			}
 
-		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
-		if ($stagedDiffResult['success']) {
-			return ['success' => false, 'message' => $nothingStaged];
-		}
+			$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+			if ($stagedDiffResult['success']) {
+				return ['success' => false, 'message' => $nothingStaged];
+			}
 
-		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $commitMessage]);
-		if (!$commitResult['success']) {
-			$this->logger->info(sprintf('git commit did not succeed while auto-committing %s: %s', $changeKind, $commitResult['output']));
-			return ['success' => false, 'message' => sprintf('%s: %s', $commitFailure, $commitResult['output'])];
-		}
+			$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $commitMessage]);
+			if (!$commitResult['success']) {
+				$this->logger->info(sprintf('git commit did not succeed while auto-committing %s: %s', $changeKind, $commitResult['output']));
+				return ['success' => false, 'message' => sprintf('%s: %s', $commitFailure, $this->summariseGitOutput($commitResult['output']))];
+			}
 
-		$commitHash = $this->readHeadCommitHash($repositoryPath, sprintf('after auto-committing %s', $changeKind));
+			$commitHash = $this->readHeadCommitHash($repositoryPath, sprintf('after auto-committing %s', $changeKind));
 
-		$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
-		$this->createSnapshotRecord($userId, $snapshotFilePath, $commitHash, $commitMessage, $parentSnapshot?->getId(), $snapshotStatus, $fileId);
+			$parentSnapshot = $this->snapshotMapper->findLatestForFileId($userId, $fileId);
+			$this->createSnapshotRecord($userId, $snapshotFilePath, $commitHash, $commitMessage, $parentSnapshot?->getId(), $snapshotStatus, $fileId);
 
-		$this->logger->info($successMessage);
-		return ['success' => true, 'message' => $successMessage . '.'];
+			$this->logger->info($successMessage);
+			return ['success' => true, 'message' => $successMessage . '.'];
+		});
 	}
 
 	/**
@@ -495,6 +628,115 @@ class VcsService {
 	}
 
 	/**
+	 * Wraps a working-tree-relative path in git's `:(literal)` pathspec magic, so git
+	 * matches it as an exact path rather than as a glob pattern. A bare path after
+	 * `--` is still a *pathspec*: `--` only stops option parsing, it does not stop
+	 * wildcard matching, so a real file named `report-*.txt` (`*`, `?`, `[` and `]`
+	 * are all legal Nextcloud filenames) would otherwise make git act on every
+	 * sibling it happens to match. Prefixing is also safe for a path that itself
+	 * begins with `:`, since git strips exactly one magic prefix.
+	 */
+	private function literalPathspec(string $relativeFilePath): string {
+		return self::PATHSPEC_LITERAL_PREFIX . $relativeFilePath;
+	}
+
+	/**
+	 * @param list<string> $relativeFilePaths
+	 * @return list<string>
+	 */
+	private function literalPathspecs(array $relativeFilePaths): array {
+		return array_values(array_map($this->literalPathspec(...), $relativeFilePaths));
+	}
+
+	/**
+	 * Runs $operation while holding an exclusive lock on the user's repository, so two
+	 * requests can never drive git against the same repository at once. Without this,
+	 * concurrent stage->commit sequences collide on git's own `index.lock` and most of
+	 * them simply fail - a routine occurrence, since a sync client uploading several
+	 * files fires several auto-commit listeners at once, and those race the dashboard's
+	 * own commits. The lock is held across the whole stage->commit->record sequence,
+	 * not per git invocation, since it is the sequence that has to be atomic.
+	 *
+	 * The lock file is a sibling of the Git directory rather than a file inside it, so
+	 * it survives deleteHistory() removing that directory underneath a waiter. No
+	 * locked operation calls another, so there is nothing here that can self-deadlock.
+	 *
+	 * @param callable(): array{success: bool, message: string} $operation
+	 * @return array{success: bool, message: string}
+	 */
+	private function withRepositoryLock(string $repositoryPath, callable $operation): array {
+		$lockPath = $this->resolveGitDirectory($repositoryPath) . self::LOCK_FILE_SUFFIX;
+
+		// Suppressed and checked via the return value, the same convention runProcess()'s
+		// own `@proc_open` uses. Failing to open the lock file is not worth failing an
+		// otherwise valid commit over, so this degrades to the previous unserialized
+		// behavior rather than blocking the user outright.
+		$handle = @fopen($lockPath, 'c');
+		if ($handle === false) {
+			$this->logger->warning(sprintf('Could not open the GitCloud lock file at %s; proceeding without a repository lock.', $lockPath));
+			return $operation();
+		}
+
+		try {
+			if (!$this->acquireLock($handle)) {
+				$this->logger->warning(sprintf('Timed out waiting for the GitCloud repository lock at %s.', $lockPath));
+				return ['success' => false, 'message' => self::REPOSITORY_BUSY_MESSAGE];
+			}
+
+			try {
+				return $operation();
+			} finally {
+				flock($handle, LOCK_UN);
+			}
+		} finally {
+			fclose($handle);
+		}
+	}
+
+	/**
+	 * Waits up to LOCK_TIMEOUT_SECONDS for an exclusive lock on $handle. Deliberately
+	 * polls a non-blocking flock() rather than blocking indefinitely, so a stuck holder
+	 * turns into a clear "try again" message instead of a hung request.
+	 *
+	 * @param resource $handle
+	 */
+	private function acquireLock($handle): bool {
+		$deadline = microtime(true) + self::LOCK_TIMEOUT_SECONDS;
+		do {
+			if (flock($handle, LOCK_EX | LOCK_NB)) {
+				return true;
+			}
+
+			usleep(self::LOCK_RETRY_INTERVAL_MICROSECONDS);
+		} while (microtime(true) < $deadline);
+
+		return false;
+	}
+
+	/**
+	 * Condenses git's own output down to something fit for an API response. Git can be
+	 * extremely verbose on failure - a failed commit prints the entire porcelain status,
+	 * i.e. a listing of every untracked file the user has - and every caller forwards
+	 * this straight to the dashboard. The full output is still logged untouched.
+	 */
+	private function summariseGitOutput(string $output): string {
+		$lines = array_values(array_filter(
+			array_map('trim', preg_split('/\R/', trim($output)) ?: []),
+			static fn (string $line): bool => $line !== '',
+		));
+		if ($lines === []) {
+			return 'no output';
+		}
+
+		$summary = implode(' ', array_slice($lines, 0, self::MAX_ERROR_OUTPUT_LINES));
+		if (count($lines) > self::MAX_ERROR_OUTPUT_LINES || mb_strlen($summary) > self::MAX_ERROR_OUTPUT_LENGTH) {
+			$summary = rtrim(mb_substr($summary, 0, self::MAX_ERROR_OUTPUT_LENGTH)) . '...';
+		}
+
+		return $summary;
+	}
+
+	/**
 	 * @return array{success: bool, message?: string}
 	 */
 	private function ensureRepository(string $repositoryPath): array {
@@ -511,7 +753,7 @@ class VcsService {
 		$initResult = $this->runGit($repositoryPath, ['--git-dir=' . $gitDirectory, 'init']);
 		if (!$initResult['success']) {
 			$this->logger->warning(sprintf('git init failed: %s', $initResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to initialize repository: %s', $initResult['output'])];
+			return ['success' => false, 'message' => sprintf('Failed to initialize repository: %s', $this->summariseGitOutput($initResult['output']))];
 		}
 
 		// Initializing with only `--git-dir` leaves core.bare = true. Every command
@@ -670,7 +912,7 @@ class VcsService {
 			if (empty($relativeFilePaths)) {
 				$gitStatus = 'Clean';
 			} else {
-				$statusResult = $this->runGit($repositoryPath, array_merge(['status', '--porcelain', '--'], $relativeFilePaths));
+				$statusResult = $this->runGit($repositoryPath, array_merge(['status', '--porcelain', '--'], $this->literalPathspecs($relativeFilePaths)));
 				$gitStatus = ($statusResult['success'] && trim($statusResult['output']) === '') ? 'Clean' : 'Modified';
 			}
 		}
@@ -698,7 +940,7 @@ class VcsService {
 		// -z gives NUL-delimited, unquoted paths; without it git quotes any path
 		// containing a space or other special character (e.g. `"folder/a.txt"`),
 		// which would never match a plain relative path in $statuses below.
-		$statusResult = $this->runGit($repositoryPath, array_merge(['status', '--porcelain', '-z', '--'], $relativeFilePaths));
+		$statusResult = $this->runGit($repositoryPath, array_merge(['status', '--porcelain', '-z', '--'], $this->literalPathspecs($relativeFilePaths)));
 		if (!$statusResult['success']) {
 			return $statuses;
 		}
@@ -765,51 +1007,53 @@ class VcsService {
 			return ['success' => false, 'message' => 'Snapshot has no associated commit to restore.'];
 		}
 
-		$checkoutResult = $this->runGit($repositoryPath, ['checkout', $commitHash, '--', $relativeFilePath]);
-		if (!$checkoutResult['success']) {
-			$this->logger->warning(sprintf('git checkout failed during rollback: %s', $checkoutResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to restore file: %s', $checkoutResult['output'])];
-		}
+		return $this->withRepositoryLock($repositoryPath, function () use ($repositoryPath, $relativeFilePath, $snapshotId, $userId, $snapshot, $commitHash): array {
+			$checkoutResult = $this->runGit($repositoryPath, ['checkout', $commitHash, '--', $this->literalPathspec($relativeFilePath)]);
+			if (!$checkoutResult['success']) {
+				$this->logger->warning(sprintf('git checkout failed during rollback: %s', $checkoutResult['output']));
+				return ['success' => false, 'message' => sprintf('Failed to restore file: %s', $this->summariseGitOutput($checkoutResult['output']))];
+			}
 
-		$addResult = $this->runGit($repositoryPath, ['add', '--', $relativeFilePath]);
-		if (!$addResult['success']) {
-			$this->logger->warning(sprintf('git add failed during rollback: %s', $addResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to stage restored file: %s', $addResult['output'])];
-		}
+			$addResult = $this->runGit($repositoryPath, ['add', '--', $this->literalPathspec($relativeFilePath)]);
+			if (!$addResult['success']) {
+				$this->logger->warning(sprintf('git add failed during rollback: %s', $addResult['output']));
+				return ['success' => false, 'message' => sprintf('Failed to stage restored file: %s', $this->summariseGitOutput($addResult['output']))];
+			}
 
-		$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
-		if ($stagedDiffResult['success']) {
-			return ['success' => false, 'message' => 'File is already at the selected snapshot.'];
-		}
+			$stagedDiffResult = $this->runGit($repositoryPath, ['diff', '--cached', '--quiet']);
+			if ($stagedDiffResult['success']) {
+				return ['success' => false, 'message' => 'File is already at the selected snapshot.'];
+			}
 
-		$message = sprintf('Roll back %s to snapshot #%d', $relativeFilePath, $snapshotId);
-		$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
-		if (!$commitResult['success']) {
-			$this->logger->info(sprintf('git commit did not succeed during rollback: %s', $commitResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to commit restored file: %s', $commitResult['output'])];
-		}
+			$message = sprintf('Roll back %s to snapshot #%d', $relativeFilePath, $snapshotId);
+			$commitResult = $this->runGit($repositoryPath, ['commit', '-m', $message]);
+			if (!$commitResult['success']) {
+				$this->logger->info(sprintf('git commit did not succeed during rollback: %s', $commitResult['output']));
+				return ['success' => false, 'message' => sprintf('Failed to commit restored file: %s', $this->summariseGitOutput($commitResult['output']))];
+			}
 
-		$newCommitHash = $this->readHeadCommitHash($repositoryPath, 'after rollback');
+			$newCommitHash = $this->readHeadCommitHash($repositoryPath, 'after rollback');
 
-		// Chained by file id, like commitChanges() and autoCommitChange(), so the new
-		// row hangs off the file's real latest snapshot even if that was recorded
-		// under a different path (i.e. the file has since been renamed). Falls back to
-		// a path lookup only for legacy rows predating the file_id migration.
-		$fileId = $snapshot->getFileId();
-		$parentSnapshot = $fileId !== null
-			? $this->snapshotMapper->findLatestForFileId($userId, $fileId)
-			: ($this->getSnapshotsForFile($userId, $relativeFilePath)[0] ?? null);
-		// Carries the fileid of the snapshot being restored forward onto the new
-		// row. This also correctly handles rolling back an already-deleted file
-		// (no live Node to source a fileid from), and its non-'deleted' status
-		// is what clears a prior 'Deleted' dashboard state, with no special-casing.
-		$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshot?->getId(), 'rolled_back', $fileId);
+			// Chained by file id, like commitChanges() and autoCommitChange(), so the new
+			// row hangs off the file's real latest snapshot even if that was recorded
+			// under a different path (i.e. the file has since been renamed). Falls back to
+			// a path lookup only for legacy rows predating the file_id migration.
+			$fileId = $snapshot->getFileId();
+			$parentSnapshot = $fileId !== null
+				? $this->snapshotMapper->findLatestForFileId($userId, $fileId)
+				: ($this->getSnapshotsForFile($userId, $relativeFilePath)[0] ?? null);
+			// Carries the fileid of the snapshot being restored forward onto the new
+			// row. This also correctly handles rolling back an already-deleted file
+			// (no live Node to source a fileid from), and its non-'deleted' status
+			// is what clears a prior 'Deleted' dashboard state, with no special-casing.
+			$this->createSnapshotRecord($userId, $relativeFilePath, $newCommitHash, $message, $parentSnapshot?->getId(), 'rolled_back', $fileId);
 
-		$this->logger->info(sprintf('Rolled back %s to snapshot #%d', $relativeFilePath, $snapshotId));
-		return [
-			'success' => true,
-			'message' => sprintf('Successfully rolled back %s to the selected snapshot.', $relativeFilePath),
-		];
+			$this->logger->info(sprintf('Rolled back %s to snapshot #%d', $relativeFilePath, $snapshotId));
+			return [
+				'success' => true,
+				'message' => sprintf('Successfully rolled back %s to the selected snapshot.', $relativeFilePath),
+			];
+		});
 	}
 
 	/**
@@ -828,7 +1072,13 @@ class VcsService {
 		$snapshot->setUserId($userId);
 		$snapshot->setFilePath($filePath);
 		$snapshot->setCommitHash($commitHash);
-		$snapshot->setMessage($message);
+		// Last-resort guard, not the primary validation: a user-supplied message is
+		// already rejected with a clear 400 at the API boundary. This covers the
+		// messages GitCloud generates itself (which embed file paths, so they have no
+		// fixed length either), so an over-long message can never make this insert
+		// throw *after* git has already committed - which would leave the file in git
+		// with no snapshot row to prove it, i.e. stranded as permanently Uncommitted.
+		$snapshot->setMessage(mb_substr($message, 0, self::MAX_COMMIT_MESSAGE_LENGTH));
 		$snapshot->setParentSnapshotId($parentSnapshotId);
 		$snapshot->setStatus($status);
 		$snapshot->setFileId($fileId);
@@ -1005,8 +1255,8 @@ class VcsService {
 	 * gitcloud_snapshots row for $userId, since their commit hashes become invalid
 	 * once history is wiped.
 	 *
-	 * There is no locking around this (the codebase has none anywhere today), so a
-	 * commit/rollback racing with a history wipe is a known, unhandled edge case.
+	 * Runs under the same per-repository lock as every other git operation (see
+	 * withRepositoryLock()), so a commit or rollback can no longer race a history wipe.
 	 *
 	 * @return array{success: bool, message: string}
 	 */
@@ -1016,20 +1266,48 @@ class VcsService {
 			return ['success' => false, 'message' => 'Repository path does not exist.'];
 		}
 
-		if ($this->hasRepository($repositoryPath)) {
-			$this->removeDirectoryRecursive($this->resolveGitDirectory($repositoryPath));
-		}
+		return $this->withRepositoryLock($repositoryPath, function () use ($repositoryPath, $userId): array {
+			if ($this->hasRepository($repositoryPath)) {
+				$gitDirectory = $this->resolveGitDirectory($repositoryPath);
 
-		$initResult = $this->ensureRepository($repositoryPath);
-		if (!$initResult['success']) {
-			return ['success' => false, 'message' => $initResult['message'] ?? 'Failed to reinitialize repository.'];
-		}
+				// Checked up front, before a single file is unlinked: deleting an entry needs
+				// write permission on the directory containing it, so a read-only directory
+				// anywhere in the tree would otherwise be discovered only part-way through a
+				// CHILD_FIRST walk that had already emptied everything it could reach.
+				if (!$this->canRemoveDirectoryRecursive($gitDirectory)) {
+					$this->logger->error(sprintf('Cannot delete the Git directory for user %s: it is not fully writable.', $userId));
+					return [
+						'success' => false,
+						'message' => 'Could not delete the commit history: GitCloud\'s repository directory is not writable. Your history has been left as it was.',
+					];
+				}
 
-		$this->snapshotMapper->deleteAllForUser($userId);
-		$this->invalidateSnapshotCache();
+				// A partial wipe must not be reported as a success: hasRepository() is a bare
+				// is_dir(), so a Git directory whose final rmdir() failed still looks present
+				// and ensureRepository() below would short-circuit without reinitializing it,
+				// leaving a half-deleted, unusable repository behind. Bail out *before* the
+				// snapshot rows are deleted, so nothing is lost that the surviving repository
+				// can no longer account for.
+				if (!$this->removeDirectoryRecursive($gitDirectory)) {
+					$this->logger->error(sprintf('Failed to fully delete the Git directory for user %s; history was left untouched.', $userId));
+					return [
+						'success' => false,
+						'message' => 'Could not delete the commit history: part of GitCloud\'s repository could not be removed. Your history has been left as it was.',
+					];
+				}
+			}
 
-		$this->logger->info(sprintf('Deleted all Git history for user %s', $userId));
-		return ['success' => true, 'message' => 'All commit history has been permanently deleted.'];
+			$initResult = $this->ensureRepository($repositoryPath);
+			if (!$initResult['success']) {
+				return ['success' => false, 'message' => $initResult['message'] ?? 'Failed to reinitialize repository.'];
+			}
+
+			$this->snapshotMapper->deleteAllForUser($userId);
+			$this->invalidateSnapshotCache();
+
+			$this->logger->info(sprintf('Deleted all Git history for user %s', $userId));
+			return ['success' => true, 'message' => 'All commit history has been permanently deleted.'];
+		});
 	}
 
 	/**
@@ -1057,7 +1335,7 @@ class VcsService {
 		if (!$tarResult['success']) {
 			@unlink($backupPath);
 			$this->logger->warning(sprintf('tar failed while creating a history backup: %s', $tarResult['output']));
-			return ['success' => false, 'message' => sprintf('Failed to create backup archive: %s', trim($tarResult['output']))];
+			return ['success' => false, 'message' => sprintf('Failed to create backup archive: %s', $this->summariseGitOutput($tarResult['output']))];
 		}
 
 		$this->logger->info(sprintf('Created a Git history backup archive for user %s', $userId));
@@ -1065,23 +1343,60 @@ class VcsService {
 	}
 
 	/**
-	 * Recursively deletes a directory and its contents.
+	 * Best-effort pre-flight for removeDirectoryRecursive(): whether every directory
+	 * involved is writable, i.e. whether the removal can be expected to fully
+	 * succeed. Deleting an entry needs write permission on the directory *containing*
+	 * it, so this covers $path, every directory beneath it, and $path's own parent
+	 * (needed to remove $path itself).
 	 */
-	private function removeDirectoryRecursive(string $path): void {
+	private function canRemoveDirectoryRecursive(string $path): bool {
+		if (!is_writable(dirname($path)) || !is_writable($path)) {
+			return false;
+		}
+
 		$iterator = new \RecursiveIteratorIterator(
 			new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
 			\RecursiveIteratorIterator::CHILD_FIRST,
 		);
 
 		foreach ($iterator as $entry) {
-			if ($entry->isDir()) {
-				rmdir($entry->getPathname());
-			} else {
-				unlink($entry->getPathname());
+			if ($entry->isDir() && !is_writable($entry->getPathname())) {
+				return false;
 			}
 		}
 
-		rmdir($path);
+		return true;
+	}
+
+	/**
+	 * Recursively deletes a directory and its contents, reporting whether every
+	 * entry - including $path itself - was actually removed. Each unlink/rmdir is
+	 * `@`-suppressed and checked via its return value rather than its warning, the
+	 * same convention runProcess()'s own `@proc_open` uses; the walk deliberately
+	 * continues past a failure so the caller learns the whole outcome rather than
+	 * the first problem only.
+	 */
+	private function removeDirectoryRecursive(string $path): bool {
+		$iterator = new \RecursiveIteratorIterator(
+			new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+			\RecursiveIteratorIterator::CHILD_FIRST,
+		);
+
+		$removedEverything = true;
+		foreach ($iterator as $entry) {
+			$removed = $entry->isDir() ? @rmdir($entry->getPathname()) : @unlink($entry->getPathname());
+			if (!$removed) {
+				$this->logger->warning(sprintf('Could not delete %s while removing %s.', $entry->getPathname(), $path));
+				$removedEverything = false;
+			}
+		}
+
+		if (!@rmdir($path)) {
+			$this->logger->warning(sprintf('Could not delete the directory %s.', $path));
+			$removedEverything = false;
+		}
+
+		return $removedEverything;
 	}
 
 	// Future methods: getCommitHistory(path), listSnapshots() etc.

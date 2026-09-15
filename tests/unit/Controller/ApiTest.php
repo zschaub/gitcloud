@@ -16,6 +16,7 @@ use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\Files\Storage\IStorage;
 use OCP\IAppConfig;
 use OCP\IRequest;
@@ -2069,5 +2070,128 @@ final class ApiTest extends TestCase {
 
 		$this->assertEquals('error', $response->getData()['status']);
 		$this->assertEquals(401, $response->getStatus());
+	}
+
+	public function testCommitChangesRejectsAnOverlongCommitMessageBeforeTouchingGit(): void {
+		// `gitcloud_snapshots`.`message` is a 4000-character column. Without this guard
+		// git committed successfully and the snapshot insert then threw, returning a 500
+		// and leaving the file in git history with no row - stuck as Uncommitted.
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->expects($this->never())->method('getUserFolder');
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->commitChanges(['file1.txt'], str_repeat('x', VcsService::MAX_COMMIT_MESSAGE_LENGTH + 1));
+
+		$this->assertEquals(400, $response->getStatus());
+		$this->assertEquals('error', $response->getData()['status']);
+		$this->assertStringContainsString('too long', $response->getData()['message']);
+	}
+
+	public function testCommitChangesReturnsBadRequestForAPathCoreRefuses(): void {
+		// Core throws NotPermittedException (not NotFoundException) for a `..` segment,
+		// via Folder::getFullPath()'s isValidPath() check. The traversal is already
+		// blocked and nothing reaches git; leaving it uncaught just turned it into an
+		// unhelpful OCS 996 / HTTP 500.
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->willThrowException(new NotPermittedException('Invalid path "/../../../etc/passwd"'));
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
+		$vcsService->expects($this->never())->method('commitChanges');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->commitChanges(['../../../etc/passwd'], 'Traversal attempt');
+
+		$this->assertEquals(400, $response->getStatus());
+		$this->assertEquals('error', $response->getData()['status']);
+	}
+
+	public function testGetSnapshotsReturnsBadRequestForAPathCoreRefuses(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('get')->willThrowException(new NotPermittedException('Invalid path "/../../../etc/passwd"'));
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->expects($this->never())->method('getSnapshotsForFile');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->getSnapshots('../../../etc/passwd');
+
+		$this->assertEquals(400, $response->getStatus());
+		$this->assertEquals('error', $response->getData()['status']);
+	}
+
+	public function testRollbackSnapshotReturnsBadRequestForAPathCoreRefuses(): void {
+		$request = $this->createMock(IRequest::class);
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('testuser');
+
+		$userSession = $this->createMock(IUserSession::class);
+		$userSession->method('getUser')->willReturn($user);
+
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('isLocal')->willReturn(true);
+		$storage->method('getLocalFile')->willReturn('/data/testuser/files');
+
+		$userFolder = $this->createMock(Folder::class);
+		$userFolder->method('getStorage')->willReturn($storage);
+		$userFolder->method('getInternalPath')->willReturn('files');
+		$userFolder->method('get')->willThrowException(new NotPermittedException('Invalid path "/../../../etc/passwd"'));
+
+		$rootFolder = $this->createMock(IRootFolder::class);
+		$rootFolder->method('getUserFolder')->with('testuser')->willReturn($userFolder);
+
+		$vcsService = $this->createMock(VcsService::class);
+		$vcsService->method('resolveRepositoryPath')->willReturn('/data/testuser/files');
+		$vcsService->expects($this->never())->method('rollbackToSnapshot');
+
+		$controller = new ApiController(Application::APP_ID, $request, $userSession, $rootFolder, $vcsService, $this->defaultAppConfig(), $this->defaultGitStaticBinaryService());
+
+		$response = $controller->rollbackSnapshot('../../../etc/passwd', 1);
+
+		$this->assertEquals(400, $response->getStatus());
+		$this->assertEquals('error', $response->getData()['status']);
 	}
 }

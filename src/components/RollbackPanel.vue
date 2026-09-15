@@ -3,7 +3,7 @@ import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import CloseIcon from '@mdi/svg/svg/close.svg?raw'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl } from '@nextcloud/router'
 import { extractErrorMessage } from '../utils/ocs'
@@ -56,7 +56,7 @@ async function loadSnapshots() {
 
 watch(
 	() => [props.open, props.filePath],
-	([isOpen]) => {
+	([isOpen], previous) => {
 		if (isOpen) {
 			snapshots.value = []
 			loadError.value = ''
@@ -64,6 +64,16 @@ watch(
 			rollbackResultMessage.value = ''
 			confirmSnapshot.value = null
 			loadSnapshots()
+
+			if (!previous?.[0]) {
+				previouslyFocused = document.activeElement as HTMLElement | null
+				nextTick(() => panelRef.value?.focus())
+			}
+		} else if (previous?.[0]) {
+			// Focus lives inside a drawer that is about to be removed from the DOM, so
+			// it has to go back to whatever opened it rather than falling to <body>.
+			previouslyFocused?.focus()
+			previouslyFocused = null
 		}
 	},
 )
@@ -125,6 +135,64 @@ function close() {
 	emit('update:open', false)
 }
 
+// This drawer is a hand-rolled overlay rather than an NcDialog/NcAppSidebar, so the
+// dialog semantics NcDialog would otherwise provide are supplied here: without them
+// Tab walked straight out of the drawer into the dashboard still covered by the
+// backdrop, opening it left focus on the now-hidden "History" button, and the only
+// ways out were a mouse click on the backdrop or the close button.
+const panelRef = ref<HTMLElement | null>(null)
+let previouslyFocused: HTMLElement | null = null
+
+const FOCUSABLE_SELECTOR = [
+	'a[href]',
+	'button:not([disabled])',
+	'input:not([disabled])',
+	'select:not([disabled])',
+	'textarea:not([disabled])',
+	'[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+function focusableElements(): HTMLElement[] {
+	if (!panelRef.value) return []
+	return Array.from(panelRef.value.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+		.filter((element) => element.offsetParent !== null)
+}
+
+function onKeydown(event: KeyboardEvent) {
+	// The rollback-confirm NcDialog teleports its own markup to <body>, but it does not
+	// move focus into itself - focus stays on the "Rollback to this snapshot" button
+	// that opened it, i.e. inside this drawer. So its Escape keypress does bubble up to
+	// here, and without this guard a single Escape dismissed the confirm dialog *and*
+	// the drawer behind it. While the dialog is up, it owns the keyboard.
+	if (confirmSnapshot.value !== null) return
+
+	if (event.key === 'Escape') {
+		close()
+		return
+	}
+
+	if (event.key !== 'Tab') return
+
+	const elements = focusableElements()
+	if (elements.length === 0) {
+		event.preventDefault()
+		panelRef.value?.focus()
+		return
+	}
+
+	const first = elements[0]
+	const last = elements[elements.length - 1]
+	const active = document.activeElement as HTMLElement | null
+
+	if (event.shiftKey && (active === first || active === panelRef.value)) {
+		event.preventDefault()
+		last.focus()
+	} else if (!event.shiftKey && active === last) {
+		event.preventDefault()
+		first.focus()
+	}
+}
+
 const confirmButtons = computed(() => [
 	{
 		label: 'Cancel',
@@ -141,34 +209,48 @@ const confirmButtons = computed(() => [
 </script>
 
 <template>
-	<div v-if="open" class="rollback-panel__backdrop" @click.self="close">
-		<div class="rollback-panel">
+	<div v-if="open"
+		class="rollback-panel__backdrop"
+		@click.self="close"
+		@keydown="onKeydown">
+		<div
+			ref="panelRef"
+			class="rollback-panel"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="gitcloud-rollback-panel-eyebrow gitcloud-rollback-panel-filename"
+			tabindex="-1">
 			<div class="rollback-panel__header">
 				<div>
-					<div class="rollback-panel__eyebrow">
+					<div id="gitcloud-rollback-panel-eyebrow" class="rollback-panel__eyebrow">
 						Snapshot history
 					</div>
-					<div class="rollback-panel__filename">
+					<div id="gitcloud-rollback-panel-filename" class="rollback-panel__filename">
 						{{ filePath ? fileName(filePath) : "" }}
 					</div>
 				</div>
 				<NcButton variant="tertiary" aria-label="Close" @click="close">
 					<template #icon>
-						<span class="rollback-panel__close-icon" v-html="CloseIcon" />
+						<span class="rollback-panel__close-icon" aria-hidden="true" v-html="CloseIcon" />
 					</template>
 				</NcButton>
 			</div>
 
-			<p v-if="rollbackStatus === 'success'" class="rollback-panel__banner rollback-panel__banner--success">
+			<p v-if="rollbackStatus === 'success'" class="rollback-panel__banner rollback-panel__banner--success" role="status">
 				{{ rollbackResultMessage }}
 			</p>
-			<p v-if="rollbackStatus === 'error'" class="rollback-panel__banner rollback-panel__banner--error">
+			<p v-if="rollbackStatus === 'error'" class="rollback-panel__banner rollback-panel__banner--error" role="alert">
 				{{ rollbackResultMessage }}
 			</p>
 
 			<div class="rollback-panel__body">
-				<NcLoadingIcon v-if="isLoading" :size="32" />
-				<p v-else-if="loadError" class="rollback-panel__banner rollback-panel__banner--error">
+				<div v-if="isLoading"
+					class="rollback-panel__loading"
+					role="status"
+					aria-label="Loading snapshot history">
+					<NcLoadingIcon :size="32" />
+				</div>
+				<p v-else-if="loadError" class="rollback-panel__banner rollback-panel__banner--error" role="alert">
 					{{ loadError }}
 				</p>
 				<p v-else-if="snapshots.length === 0" class="rollback-panel__empty">
@@ -234,6 +316,10 @@ const confirmButtons = computed(() => [
     display: flex;
     justify-content: flex-end;
     z-index: 2000;
+}
+
+.rollback-panel:focus {
+    outline: none;
 }
 
 .rollback-panel {

@@ -1524,4 +1524,293 @@ final class VcsServiceTest extends TestCase {
 		$this->assertStringContainsString('[user]', $config);
 		$this->assertStringContainsString('bare = false', $config);
 	}
+
+	public function testCommitChangesTreatsAGlobCharacterInAFilenameAsALiteralPath(): void {
+		// `*`, `?`, `[` and `]` are all legal Nextcloud filenames, but a bare path after
+		// `--` is still a *pathspec*: `--` stops option parsing, not glob matching. So
+		// committing a real file named `report-*.txt` used to silently commit every
+		// sibling it happened to match, with a snapshot row recorded for only one of them.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		file_put_contents($this->tmpRepoPath . '/report-*.txt', 'the literally-named file');
+		file_put_contents($this->tmpRepoPath . '/report-private.txt', 'secret data');
+		file_put_contents($this->tmpRepoPath . '/report-public.txt', 'public data');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->willReturn(null);
+		$snapshotMapper->method('insert')->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'report-*.txt', 'fileId' => 42]], 'Commit the glob-named file', 'testuser');
+
+		$this->assertTrue($result['success']);
+
+		$committed = [];
+		exec($this->gitCommand() . ' show --name-only --format= HEAD', $committed);
+		$committed = array_values(array_filter(array_map('trim', $committed), static fn (string $line): bool => $line !== ''));
+
+		$this->assertSame(['report-*.txt'], $committed);
+	}
+
+	public function testRollbackToSnapshotOnlyRestoresTheRequestedFileWhenItsNameContainsAGlobCharacter(): void {
+		// The rollback half of the same pathspec-globbing defect, and the damaging one:
+		// `git checkout <hash> -- report-*.txt` used to overwrite every matching sibling
+		// on disk with whatever content that commit held, destroying uncommitted work.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/report-*.txt', 'glob file v1');
+		file_put_contents($this->tmpRepoPath . '/report-private.txt', 'secret data');
+		exec($this->gitCommand() . ' add -A');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+		exec($this->gitCommand() . ' rev-parse HEAD', $headOutput);
+		$originalCommitHash = trim($headOutput[0]);
+
+		file_put_contents($this->tmpRepoPath . '/report-*.txt', 'glob file v2');
+		file_put_contents($this->tmpRepoPath . '/report-private.txt', 'IMPORTANT NEW PRIVATE WORK');
+		exec($this->gitCommand() . ' add -A');
+		exec($this->gitCommand() . ' commit -q -m "Second commit"');
+		file_put_contents($this->tmpRepoPath . '/report-private.txt', 'EVEN NEWER UNCOMMITTED WORK');
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$targetSnapshot = new Snapshot();
+		$targetSnapshot->setId(1);
+		$targetSnapshot->setUserId('testuser');
+		$targetSnapshot->setFilePath('report-*.txt');
+		$targetSnapshot->setCommitHash($originalCommitHash);
+		$targetSnapshot->setFileId(55);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('find')->with(1)->willReturn($targetSnapshot);
+		$snapshotMapper->method('findLatestForFileId')->willReturn(null);
+		$snapshotMapper->method('insert')->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->rollbackToSnapshot($this->tmpRepoPath, 'report-*.txt', 1, 'testuser');
+
+		$this->assertTrue($result['success']);
+		$this->assertSame('glob file v1', file_get_contents($this->tmpRepoPath . '/report-*.txt'));
+		$this->assertSame('EVEN NEWER UNCOMMITTED WORK', file_get_contents($this->tmpRepoPath . '/report-private.txt'));
+	}
+
+	public function testCommitChangesRelinksAFileGitAlreadyTracksButGitCloudHasNoHistoryFor(): void {
+		// The "Stop tracking, then change your mind" flow: untrackFile() deletes the
+		// snapshot rows and deliberately leaves git history alone, so `git diff --cached`
+		// is empty on the next commit and the file used to be stuck as `Uncommitted`
+		// forever. Nothing new is committed, but the file is tracked again from HEAD.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/alpha.txt', 'unchanged content');
+		exec($this->gitCommand() . ' add alpha.txt');
+		exec($this->gitCommand() . ' commit -q -m "Committed before untracking"');
+		exec($this->gitCommand() . ' rev-parse HEAD', $headOutput);
+		$headCommitHash = trim($headOutput[0]);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		// No GitCloud history at all - exactly the state untrackFile() leaves behind.
+		$snapshotMapper->method('findLatestForFileId')->willReturn(null);
+		$snapshotMapper->method('findAllForFile')->willReturn([]);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getFilePath() === 'alpha.txt'
+				&& $snapshot->getCommitHash() === $headCommitHash
+				&& $snapshot->getStatus() === 'committed'
+				&& $snapshot->getParentSnapshotId() === null
+				&& $snapshot->getFileId() === 42))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'alpha.txt', 'fileId' => 42]], 'Track this again', 'testuser');
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testCommitChangesStillReportsNothingToCommitForAnUnchangedFileItAlreadyTracks(): void {
+		// The counterpart to the test above: a file GitCloud *does* have history for
+		// genuinely has nothing to commit, and must keep the original message rather
+		// than silently accumulating a duplicate snapshot row on every click.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/alpha.txt', 'unchanged content');
+		exec($this->gitCommand() . ' add alpha.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+
+		$existingSnapshot = new Snapshot();
+		$existingSnapshot->setId(3);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->willReturn($existingSnapshot);
+		$snapshotMapper->expects($this->never())->method('insert');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'alpha.txt', 'fileId' => 42]], 'Nothing changed', 'testuser');
+
+		$this->assertFalse($result['success']);
+		$this->assertSame('No changes to commit for the selected file(s).', $result['message']);
+	}
+
+	public function testCommitChangesOnlyRelinksTheFilesGitCloudHasNoHistoryFor(): void {
+		// A mixed selection: nothing has changed on disk, so nothing is staged, but only
+		// the file GitCloud has lost its history for needs a row recording against HEAD.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
+
+		file_put_contents($this->tmpRepoPath . '/tracked.txt', 'still tracked');
+		file_put_contents($this->tmpRepoPath . '/untracked.txt', 'untracked by gitcloud');
+		exec($this->gitCommand() . ' add -A');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+
+		$existingSnapshot = new Snapshot();
+		$existingSnapshot->setId(3);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')
+			->willReturnCallback(static fn (string $userId, int $fileId): ?Snapshot => $fileId === 42 ? $existingSnapshot : null);
+		$snapshotMapper->method('findAllForFile')->willReturn([]);
+		$snapshotMapper->expects($this->once())
+			->method('insert')
+			->with($this->callback(fn (Snapshot $snapshot): bool => $snapshot->getFilePath() === 'untracked.txt'))
+			->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges(
+			$this->tmpRepoPath,
+			[['path' => 'tracked.txt', 'fileId' => 42], ['path' => 'untracked.txt', 'fileId' => 43]],
+			'Track this again',
+			'testuser',
+		);
+
+		$this->assertTrue($result['success']);
+	}
+
+	public function testCommitChangesHoldsAnExclusiveRepositoryLockWhileItRuns(): void {
+		// Concurrent commits used to collide on git's own `index.lock` and mostly fail,
+		// leaking raw git stderr to the user. flock() locks belong to the open file
+		// description, so a second fopen() of the same path inside this same process
+		// genuinely contends for the lock and proves it is held.
+		$this->tmpRepoPath = $this->createWorkingTree();
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		$lockPath = $this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME . '.lock';
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$lockedDuringCommit = null;
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('findLatestForFileId')->willReturn(null);
+		$snapshotMapper->method('insert')
+			->willReturnCallback(function (Snapshot $snapshot) use ($lockPath, &$lockedDuringCommit): Snapshot {
+				$contender = fopen($lockPath, 'c');
+				$lockedDuringCommit = !flock($contender, LOCK_EX | LOCK_NB);
+				fclose($contender);
+
+				return $snapshot;
+			});
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->commitChanges($this->tmpRepoPath, [['path' => 'file1.txt', 'fileId' => 42]], 'Initial commit', 'testuser');
+
+		$this->assertTrue($result['success']);
+		$this->assertTrue($lockedDuringCommit, 'The repository lock should be held for the whole stage->commit->record sequence.');
+
+		$afterwards = fopen($lockPath, 'c');
+		$this->assertTrue(flock($afterwards, LOCK_EX | LOCK_NB), 'The repository lock should be released once the commit finishes.');
+		flock($afterwards, LOCK_UN);
+		fclose($afterwards);
+	}
+
+	public function testDeleteHistoryRefusesAndKeepsSnapshotsWhenTheGitDirectoryIsNotWritable(): void {
+		// A wipe that can only partially succeed used to report success anyway, leaving a
+		// half-deleted repository that hasRepository()'s bare is_dir() still accepts (so
+		// ensureRepository() never reinitialised it) with every snapshot row already
+		// gone - i.e. no history, no rows, a broken repository, and a green message.
+		if (posix_getuid() === 0) {
+			$this->markTestSkipped('Root ignores permission bits, so a read-only directory would not actually block the wipe.');
+		}
+
+		$this->tmpRepoPath = $this->createWorkingTree();
+		exec($this->gitInitCommand());
+		exec($this->gitCommand() . ' config user.email "test@example.com"');
+		exec($this->gitCommand() . ' config user.name "Test"');
+		file_put_contents($this->tmpRepoPath . '/file1.txt', 'hello');
+		exec($this->gitCommand() . ' add file1.txt');
+		exec($this->gitCommand() . ' commit -q -m "Initial commit"');
+
+		$gitDirectory = $this->tmpHomePath . '/' . VcsService::GIT_DIRECTORY_NAME;
+		chmod($gitDirectory, 0500);
+
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->expects($this->never())->method('deleteAllForUser');
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$result = $service->deleteHistory($this->tmpRepoPath, 'testuser');
+
+		chmod($gitDirectory, 0700);
+
+		$this->assertFalse($result['success']);
+		$this->assertStringContainsString('not writable', $result['message']);
+		// Nothing was touched, so the repository is still a working one rather than a
+		// half-emptied shell: its history is intact and readable.
+		$log = [];
+		exec($this->gitCommand() . ' log --oneline', $log);
+		$this->assertCount(1, $log);
+	}
+
+	public function testCreateSnapshotRecordTruncatesAnOverlongMessageToTheColumnLimit(): void {
+		// `gitcloud_snapshots`.`message` is a 4000-character column. A longer message
+		// used to make the insert throw *after* git had already committed, leaving the
+		// file in git history with no snapshot row - stuck as Uncommitted forever. A
+		// user-supplied message is rejected at the API boundary; this is the safety net
+		// for the messages GitCloud generates itself, which embed unbounded file paths.
+		$logger = $this->createMock(LoggerInterface::class);
+		$timeFactory = $this->createMock(ITimeFactory::class);
+		$timeFactory->method('getTime')->willReturn(1720000000);
+
+		$snapshotMapper = $this->createMock(SnapshotMapper::class);
+		$snapshotMapper->method('insert')->willReturnArgument(0);
+
+		$service = new VcsService($logger, $snapshotMapper, $timeFactory);
+
+		$snapshot = $service->createSnapshotRecord('testuser', 'file1.txt', 'abc123', str_repeat('x', 5000), null, 'committed', 42);
+
+		$this->assertSame(VcsService::MAX_COMMIT_MESSAGE_LENGTH, mb_strlen($snapshot->getMessage()));
+	}
 }

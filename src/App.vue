@@ -347,10 +347,16 @@ const untrackConfirmButtons = computed(() => [
 	<NcContent app-name="gitcloud">
 		<NcAppContent app-name="gitcloud">
 			<div class="dashboard-container">
-				<p v-if="statusError" class="banner banner--error">
+				<!-- role="alert"/"status" so these asynchronous results are actually
+					announced, rather than appearing and disappearing silently. -->
+				<p v-if="statusError" class="banner banner--error" role="alert">
 					{{ statusError }}
 				</p>
-				<p v-if="untrackMessageType" class="banner" :class="`banner--${untrackMessageType}`">
+				<p
+					v-if="untrackMessageType"
+					class="banner"
+					:class="`banner--${untrackMessageType}`"
+					:role="untrackMessageType === 'error' ? 'alert' : 'status'">
 					{{ untrackMessage }}
 				</p>
 
@@ -388,19 +394,19 @@ const untrackConfirmButtons = computed(() => [
 								Status
 							</div>
 							<div class="stat-card__status">
-								<span class="status-dot" :class="`status-dot--${gitStatusVariant}`" />
+								<span class="status-dot" :class="`status-dot--${gitStatusVariant}`" aria-hidden="true" />
 								<span class="stat-card__value stat-card__value--status">{{ gitStatus }}</span>
 							</div>
 						</div>
 					</section>
 
-					<p v-if="directoriesError" class="banner banner--error">
+					<p v-if="directoriesError" class="banner banner--error" role="alert">
 						{{ directoriesError }}
 					</p>
 
 					<template v-if="directories.length === 0">
 						<div class="empty-panel">
-							<span class="empty-panel__icon" v-html="FolderOutlineIcon" />
+							<span class="empty-panel__icon" aria-hidden="true" v-html="FolderOutlineIcon" />
 							<div class="empty-panel__title">
 								No directories tracked yet
 							</div>
@@ -421,25 +427,34 @@ const untrackConfirmButtons = computed(() => [
 								@update:model-value="searchTerm = String($event)" />
 						</div>
 						<ul v-if="displayedDirectoryRows.length" class="directory-list">
-							<li
-								v-for="row in displayedDirectoryRows"
-								:key="row.path"
-								class="directory-row"
-								:class="{ 'directory-row--synthetic': !row.isReal }"
-								:style="{ paddingLeft: `${20 + row.depth * 22}px` }"
-								@click="row.isReal && selectDirectory(row.path)">
-								<span class="directory-row__icon" v-html="FolderOutlineIcon" />
-								<span class="directory-row__label">{{ row.label }}</span>
-								<template v-if="row.isReal">
-									<span class="directory-row__pill">{{ trackedFileCount(row) }} {{ trackedFileCount(row) === 1 ? 'file' : 'files' }}</span>
-									<span v-if="modifiedFileCount(row) > 0" class="directory-row__pill directory-row__pill--modified">
-										{{ modifiedFileCount(row) }} modified
-									</span>
-									<span v-if="uncommittedFileCount(row) > 0" class="directory-row__pill directory-row__pill--uncommitted">
-										{{ uncommittedFileCount(row) }} uncommitted
-									</span>
-									<span class="directory-row__chevron" v-html="ChevronRightIcon" />
-								</template>
+							<li v-for="row in displayedDirectoryRows" :key="row.path" class="directory-list__item">
+								<!--
+									A real <button> rather than a clickable <li>: selecting a directory is
+									the only route to Directory Detail, and so to commit, History/rollback
+									and Stop tracking, which left that whole half of the app unreachable
+									by keyboard. Rows that only exist to group children under (no directly
+									committed files of their own) aren't interactive, so they stay a <div>.
+								-->
+								<component
+									:is="row.isReal ? 'button' : 'div'"
+									:type="row.isReal ? 'button' : undefined"
+									class="directory-row"
+									:class="{ 'directory-row--synthetic': !row.isReal }"
+									:style="{ paddingInlineStart: `${20 + row.depth * 22}px` }"
+									@click="row.isReal && selectDirectory(row.path)">
+									<span class="directory-row__icon" aria-hidden="true" v-html="FolderOutlineIcon" />
+									<span class="directory-row__label">{{ row.label }}</span>
+									<template v-if="row.isReal">
+										<span class="directory-row__pill">{{ trackedFileCount(row) }} {{ trackedFileCount(row) === 1 ? 'file' : 'files' }}</span>
+										<span v-if="modifiedFileCount(row) > 0" class="directory-row__pill directory-row__pill--modified">
+											{{ modifiedFileCount(row) }} modified
+										</span>
+										<span v-if="uncommittedFileCount(row) > 0" class="directory-row__pill directory-row__pill--uncommitted">
+											{{ uncommittedFileCount(row) }} uncommitted
+										</span>
+										<span class="directory-row__chevron" aria-hidden="true" v-html="ChevronRightIcon" />
+									</template>
+								</component>
 							</li>
 						</ul>
 						<p v-else class="no-match">
@@ -456,14 +471,18 @@ const untrackConfirmButtons = computed(() => [
 						</NcButton>
 						<NcButton variant="tertiary" @click="requestUntrackDirectory">
 							<template #icon>
-								<span class="file-row__history-icon" v-html="LinkOffIcon" />
+								<span class="file-row__history-icon" aria-hidden="true" v-html="LinkOffIcon" />
 							</template>
 							Stop tracking this folder
 						</NcButton>
 					</div>
-					<h2>{{ directoryLabel(selectedDirectory) }}</h2>
+					<!-- An <h1>, not an <h2>: the only other <h1> lives in the Overview-only
+						branch, so Directory Detail used to start at <h2> with no page heading. -->
+					<h1 class="directory-detail__title">
+						{{ directoryLabel(selectedDirectory) }}
+					</h1>
 
-					<p v-if="directoryStatusError" class="banner banner--error">
+					<p v-if="directoryStatusError" class="banner banner--error" role="alert">
 						{{ directoryStatusError }}
 					</p>
 
@@ -489,7 +508,7 @@ const untrackConfirmButtons = computed(() => [
 								Status
 							</div>
 							<div class="stat-card__status">
-								<span class="status-dot" :class="`status-dot--${directoryGitStatusVariant}`" />
+								<span class="status-dot" :class="`status-dot--${directoryGitStatusVariant}`" aria-hidden="true" />
 								<span class="stat-card__value stat-card__value--status">{{ directoryGitStatus }}</span>
 							</div>
 						</div>
@@ -499,28 +518,35 @@ const untrackConfirmButtons = computed(() => [
 						<h2>Files</h2>
 						<ul class="file-list">
 							<li v-for="file in selectedDirectoryFiles" :key="file.path" class="file-row">
+								<!-- aria-label rather than a bare title: a disabled input isn't
+									focusable, so the title explaining *why* it is disabled was
+									unreachable, and the checkbox itself announced only "checkbox,
+									unchecked" with no indication of which file it belonged to. -->
 								<input
 									type="checkbox"
 									class="file-row__checkbox"
 									:checked="selectedFiles.has(file.path)"
 									:disabled="isDeleted(file)"
+									:aria-label="isDeleted(file)
+										? `${file.path} (deleted — use History to restore)`
+										: `Select ${file.path} to commit`"
 									:title="isDeleted(file) ? 'Deleted — use History to restore' : undefined"
 									@change="toggleFileSelection(file.path)">
-								<span class="file-row__icon" v-html="FileDocumentOutlineIcon" />
+								<span class="file-row__icon" aria-hidden="true" v-html="FileDocumentOutlineIcon" />
 								<span class="file-row__name">{{ file.path }}</span>
 								<span class="file-row__status">
-									<span class="status-dot" :class="`status-dot--${statusVariant(file.status)}`" />
+									<span class="status-dot" :class="`status-dot--${statusVariant(file.status)}`" aria-hidden="true" />
 									{{ file.status }}
 								</span>
 								<NcButton variant="tertiary" @click="openRollbackForFile(file.path)">
 									<template #icon>
-										<span class="file-row__history-icon" v-html="ClockOutlineIcon" />
+										<span class="file-row__history-icon" aria-hidden="true" v-html="ClockOutlineIcon" />
 									</template>
 									History
 								</NcButton>
 								<NcButton variant="tertiary" @click="requestUntrackFile(file.path)">
 									<template #icon>
-										<span class="file-row__history-icon" v-html="LinkOffIcon" />
+										<span class="file-row__history-icon" aria-hidden="true" v-html="LinkOffIcon" />
 									</template>
 									Stop tracking
 								</NcButton>
@@ -589,6 +615,13 @@ h1 {
 h2 {
     font-size: 16px;
     font-weight: 700;
+}
+
+/* Promoted from <h2> to <h1> so Directory Detail has a real top-level heading; the
+   original <h2> sizing is kept so the view itself looks unchanged. */
+.directory-detail__title {
+    font-size: 16px;
+    margin: 0 0 20px;
 }
 
 .banner {
@@ -752,12 +785,26 @@ h2 {
     display: flex;
     align-items: center;
     gap: 12px;
+
+    /* The row is a real <button>, so its own chrome is reset back to the plain row
+       it has always looked like; only the focus ring below is added. */
+    width: 100%;
     padding: 14px 20px;
+    border: none;
     border-bottom: 1px solid var(--color-border);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
     cursor: pointer;
 }
 
-.directory-row:last-child {
+.directory-row:focus-visible {
+    outline: 2px solid var(--color-primary-element);
+    outline-offset: -2px;
+}
+
+.directory-list__item:last-child .directory-row {
     border-bottom: none;
 }
 

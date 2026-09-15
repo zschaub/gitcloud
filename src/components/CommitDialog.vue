@@ -174,10 +174,10 @@ const confirmButtons = computed(() => [
 				:disabled="status === 'loading' || status === 'success'"
 				@update:model-value="message = String($event)" />
 
-			<p v-if="status === 'success'" class="commit-dialog__result commit-dialog__result--success">
+			<p v-if="status === 'success'" class="commit-dialog__result commit-dialog__result--success" role="status">
 				{{ resultMessage }}
 			</p>
-			<p v-if="status === 'error'" class="commit-dialog__result commit-dialog__result--error">
+			<p v-if="status === 'error'" class="commit-dialog__result commit-dialog__result--error" role="alert">
 				{{ resultMessage }}
 			</p>
 			<NcNoteCard v-if="warnings.length > 0" type="warning" heading="Oversized files committed anyway">

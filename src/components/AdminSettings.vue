@@ -29,6 +29,7 @@ interface GitBinaryStatus {
 }
 
 const gitStatus = ref<GitBinaryStatus | null>(null)
+const gitStatusError = ref('')
 const downloadStatus = ref<null | 'loading' | 'success' | 'error'>(null)
 const downloadMessage = ref('')
 
@@ -47,8 +48,13 @@ async function loadGitStatus() {
 	try {
 		const response = await axios.get(generateOcsUrl('apps/gitcloud/admin/git-binary-status'))
 		gitStatus.value = response.data.ocs.data
-	} catch {
+		gitStatusError.value = ''
+	} catch (error) {
+		// Reported rather than swallowed: every control below is v-if-gated on
+		// gitStatus, so a silent failure made the whole panel vanish with no
+		// explanation - indistinguishable from "this app has no such feature".
 		gitStatus.value = null
+		gitStatusError.value = extractErrorMessage(error, 'Failed to load the git binary status.')
 	}
 }
 
@@ -180,6 +186,8 @@ onMounted(loadGitStatus)
 				Always use bundled static git
 			</NcCheckboxRadioSwitch>
 		</div>
+
+		<NcNoteCard v-if="gitStatusError" type="error" :text="gitStatusError" />
 
 		<ul v-if="gitStatus" class="admin-settings__git-status">
 			<li>System git: {{ gitStatus.systemGitAvailable ? 'Available' : 'Not found' }}</li>

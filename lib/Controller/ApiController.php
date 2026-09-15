@@ -24,6 +24,7 @@ use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\IAppConfig;
 use OCP\IRequest;
 use OCP\IUserSession;
@@ -71,6 +72,20 @@ class ApiController extends OCSController {
 			);
 		}
 
+		// Rejected here, before any git work happens: `gitcloud_snapshots`.`message` is a
+		// 4000-character column, so a longer message would otherwise let git commit
+		// successfully and then blow up on the snapshot insert, leaving the file in git
+		// history with no row to prove it (and so stuck as Uncommitted on the dashboard).
+		if (mb_strlen($message) > VcsService::MAX_COMMIT_MESSAGE_LENGTH) {
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf('The commit message is too long (maximum %d characters).', VcsService::MAX_COMMIT_MESSAGE_LENGTH),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
+		}
+
 		$userFolder = $this->getUserFolderOrErrorResponse();
 		if ($userFolder instanceof DataResponse) {
 			return $userFolder;
@@ -94,7 +109,13 @@ class ApiController extends OCSController {
 
 			try {
 				$node = $userFolder->get($filePath);
-			} catch (NotFoundException) {
+			} catch (NotFoundException|NotPermittedException) {
+				// NotPermittedException is the other half of `OCP\Files\Folder::get()`'s
+				// documented contract, and is what core throws for a traversal-shaped path
+				// (a `..` segment): Folder::getFullPath() rejects it via isValidPath().
+				// Core has already blocked the traversal and nothing reaches git; catching
+				// it turns an uncaught-exception 500 into the same clean 400 a missing
+				// file gets.
 				return new DataResponse(
 					[
 						'status' => 'error',
@@ -566,6 +587,17 @@ class ApiController extends OCSController {
 		try {
 			$node = $userFolder->get($filePath);
 			$relativePath = ltrim($userFolder->getRelativePath($node->getPath()), '/');
+		} catch (NotPermittedException) {
+			// A path core refuses outright (e.g. a `..` segment) can have no recorded
+			// history to fall back to, unlike the deleted-file case below, so it is
+			// rejected here rather than being looked up as a last known path.
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf('File not found: %s', $filePath),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
 		} catch (NotFoundException) {
 			// The file may have been deleted or renamed outside GitCloud; its
 			// recorded history is still reachable by its last known path, which
@@ -640,6 +672,17 @@ class ApiController extends OCSController {
 
 		try {
 			$node = $userFolder->get($filePath);
+		} catch (NotPermittedException) {
+			// As in getSnapshots(): a path core refuses outright is not a "file that used
+			// to exist here", so it gets the same clean 400 rather than being passed on
+			// to git as a last known path.
+			return new DataResponse(
+				[
+					'status' => 'error',
+					'message' => sprintf('File not found: %s', $filePath),
+				],
+				Http::STATUS_BAD_REQUEST,
+			);
 		} catch (NotFoundException) {
 			// The file may have been deleted outside GitCloud; VcsService::rollbackToSnapshot()
 			// only needs a path string + repo path (not a live node) and authorizes the
@@ -931,7 +974,7 @@ class ApiController extends OCSController {
 	private function findUncommittedFiles(Folder $userFolder, string $directory, array $committedFiles): array {
 		try {
 			$folderNode = $userFolder->get($directory);
-		} catch (NotFoundException) {
+		} catch (NotFoundException|NotPermittedException) {
 			return [];
 		}
 
